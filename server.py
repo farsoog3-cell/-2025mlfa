@@ -6,13 +6,14 @@ from io import BytesIO
 
 app = Flask(__name__)
 
+# إزالة الخلفية
 def remove_background(image):
-    # إزالة الخلفية بطريقة بسيطة (خلفية بيضاء)
     image_np = np.array(image.convert('RGB'))
     mask = np.all(image_np > 240, axis=2)  # البكسلات البيضاء
     image_np[mask] = [255,255,255]
     return Image.fromarray(image_np)
 
+# إنشاء قالب DST
 def create_embroidery(image):
     pattern = EmbPattern()
     image = image.convert('L').resize((200,200))
@@ -26,6 +27,7 @@ def create_embroidery(image):
     bio.seek(0)
     return bio
 
+# نقطة النهاية API
 @app.route('/upload', methods=['POST'])
 def upload():
     if 'file' not in request.files:
