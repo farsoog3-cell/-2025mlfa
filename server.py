@@ -1,12 +1,13 @@
+from flask import Flask, request, send_file, jsonify
 from pyembroidery import EmbPattern, write_dst
 from PIL import Image
 import numpy as np
 import cv2
 from io import BytesIO
-from flask import Flask, request, send_file, jsonify
 
 app = Flask(__name__)
 
+# إزالة الخلفية
 def remove_background(image):
     image_np = np.array(image.convert('RGB'))
     gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
@@ -14,6 +15,7 @@ def remove_background(image):
     image_np[mask==0] = [255, 255, 255]
     return Image.fromarray(image_np)
 
+# إنشاء قالب DST
 def create_embroidery(image):
     pattern = EmbPattern()
     image = image.convert('L').resize((200,200))
@@ -23,10 +25,11 @@ def create_embroidery(image):
             if pixels[y,x] < 128:
                 pattern.add_stitch_absolute(x, y)
     bio = BytesIO()
-    write_dst(pattern, bio)  # فقط DST متاح
+    write_dst(pattern, bio)
     bio.seek(0)
     return bio
 
+# نقطة النهاية API
 @app.route('/upload', methods=['POST'])
 def upload():
     if 'file' not in request.files:
