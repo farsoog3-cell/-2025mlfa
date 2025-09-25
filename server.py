@@ -1,19 +1,19 @@
 from flask import Flask, request, send_file, jsonify
+from flask_cors import CORS
 from pyembroidery import EmbPattern, write_dst
 from PIL import Image
 import numpy as np
 from io import BytesIO
 
 app = Flask(__name__)
+CORS(app)  # يسمح بالطلبات من أي مصدر
 
-# إزالة الخلفية
 def remove_background(image):
     image_np = np.array(image.convert('RGB'))
     mask = np.all(image_np > 240, axis=2)  # البكسلات البيضاء
     image_np[mask] = [255,255,255]
     return Image.fromarray(image_np)
 
-# إنشاء قالب DST
 def create_embroidery(image):
     pattern = EmbPattern()
     image = image.convert('L').resize((200,200))
@@ -27,7 +27,6 @@ def create_embroidery(image):
     bio.seek(0)
     return bio
 
-# نقطة النهاية API
 @app.route('/upload', methods=['POST'])
 def upload():
     if 'file' not in request.files:
