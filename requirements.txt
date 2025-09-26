@@ -1,5 +1,7 @@
 flask
 flask-cors
-pyembroidery
 pillow
 numpy
+opencv-python-headless
+pyembroidery
+scipy
