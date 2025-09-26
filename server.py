@@ -15,19 +15,35 @@ def remove_background(image):
     return Image.fromarray(image_np)
 
 def create_embroidery(image):
-    image = image.convert('L').resize((200,200))
+    image = image.convert('L').resize((200,200))  # تحويل رمادي وتصغير
     pixels = np.array(image)
     pattern = EmbPattern()
+
+    # العتبة الأولى
     for y in range(0, pixels.shape[0], 2):
         for x in range(0, pixels.shape[1], 2):
-            if pixels[y,x] < 128:
+            if pixels[y, x] < 128:  # مناطق داكنة = غرزة
                 pattern.add_stitch_absolute(x, y)
-    if len(pattern.stitches) == 0:
+
+    # إذا فاضي، جرّب Threshold أوسع
+    if len(pattern.stitches) < 10:
         for y in range(0, pixels.shape[0], 2):
             for x in range(0, pixels.shape[1], 2):
-                if pixels[y,x] < 200:
+                if pixels[y, x] < 200:  # مناطق أوسع
                     pattern.add_stitch_absolute(x, y)
+
+    # إذا لازال فاضي، أضف غرزة اختبارية
+    if len(pattern.stitches) == 0:
+        pattern.add_stitch_absolute(0, 0)
+        pattern.add_stitch_absolute(10, 0)
+        pattern.add_stitch_absolute(10, 10)
+        pattern.add_stitch_absolute(0, 10)
+
     return pattern
+
+@app.route('/')
+def home():
+    return jsonify({"message": "Embroidery server running!"})
 
 @app.route('/upload', methods=['POST'])
 def upload():
