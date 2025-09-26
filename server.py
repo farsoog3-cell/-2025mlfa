@@ -7,6 +7,7 @@ import numpy as np
 from io import BytesIO
 from pyembroidery import EmbPattern, write_dst
 from scipy import ndimage
+import cv2
 
 app = Flask(__name__)
 CORS(app)
@@ -32,6 +33,7 @@ canvas { border:1px solid #555; margin-top:20px;}
 <canvas id="preview" width="300" height="300"></canvas>
 <script>
 let stitchData = [];
+let currentKey = '';
 function previewImage(input) {
     if (input.files && input.files[0]) {
         let reader = new FileReader();
@@ -59,6 +61,7 @@ function upload() {
     fetch('/upload', { method:'POST', body:form })
     .then(res => res.json())
     .then(data=>{
+        currentKey = data.key;
         stitchData = data.stitches;
         drawStitches();
         downloadDST();
@@ -79,7 +82,7 @@ function downloadDST() {
     fetch('/download_dst', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({stitches: stitchData})
+        body:JSON.stringify({key: currentKey})
     })
     .then(res=>res.blob())
     .then(blob=>{
@@ -96,6 +99,18 @@ function downloadDST() {
 </html>
 """
 
+def crop_to_content(image):
+    # تحويل الصورة لرمادي
+    gray = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2GRAY)
+    # Threshold لتحديد المحتوى
+    _, thresh = cv2.threshold(gray, 250, 255, cv2.THRESH_BINARY_INV)
+    coords = cv2.findNonZero(thresh)
+    if coords is None:
+        return image
+    x,y,w,h = cv2.boundingRect(coords)
+    cropped = image.crop((x,y,x+w,y+h))
+    return cropped
+
 def remove_background(image):
     img = image.convert("RGBA")
     arr = np.array(img)
@@ -104,14 +119,19 @@ def remove_background(image):
     arr[mask] = [255,255,255,0]
     return Image.fromarray(arr)
 
+def binarize_image(image):
+    img_gray = image.convert("L")
+    arr = np.array(img_gray)
+    arr_bin = (arr < 128).astype(np.uint8)*255
+    return Image.fromarray(arr_bin)
+
 def image_to_stitches_advanced(image):
     img = image.convert("L")
     max_dim = 200
     if img.width>max_dim or img.height>max_dim:
         img.thumbnail((max_dim,max_dim), Image.LANCZOS)
     arr = np.array(img)
-    threshold = 200
-    binary = arr < threshold
+    binary = arr < 128
     labeled, ncomponents = ndimage.label(binary)
     pattern = EmbPattern()
     step_satin = 2
@@ -137,7 +157,7 @@ def image_to_stitches_advanced(image):
         stitch_list = [[0,0],[10,0],[10,10],[0,10]]
     return pattern, stitch_list
 
-# حفظ بيانات الغرز في JSON لواجهة المعاينة
+# تخزين مؤقت للملفات
 stitch_cache = {}
 
 @app.route('/')
@@ -150,12 +170,13 @@ def upload():
         return jsonify({'error':'No file uploaded'}),400
     f = request.files['file']
     img = Image.open(f.stream).convert("RGB")
-    img = remove_background(img)
+    img = crop_to_content(img)        # قص الحواف
+    img = binarize_image(img)        # أبيض وأسود
+    img = remove_background(img)     # إزالة الخلفية
     pattern, stitches = image_to_stitches_advanced(img)
-    # حفظ مؤقت
     key = str(uuid.uuid4())
     stitch_cache[key] = pattern
-    return jsonify({'key':key, 'stitches': stitches})
+    return jsonify({'key': key, 'stitches': stitches})
 
 @app.route('/download_dst', methods=['POST'])
 def download_dst():
