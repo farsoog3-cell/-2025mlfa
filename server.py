@@ -11,6 +11,7 @@ from scipy import ndimage
 app = Flask(__name__)
 CORS(app)
 
+# HTML واجهة مع معاينة
 HTML_PAGE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -31,7 +32,7 @@ canvas { border:1px solid #555; margin-top:20px;}
 <button onclick="upload()">رفع وتحويل</button>
 <canvas id="preview" width="300" height="300"></canvas>
 <script>
-let stitchData = [];
+let imgData = null;
 function previewImage(input) {
     if (input.files && input.files[0]) {
         let reader = new FileReader();
@@ -41,9 +42,11 @@ function previewImage(input) {
                 let canvas = document.getElementById('preview');
                 let ctx = canvas.getContext('2d');
                 ctx.clearRect(0,0,canvas.width,canvas.height);
+                // fit image
                 let scale = Math.min(canvas.width/img.width, canvas.height/img.height);
                 let w = img.width*scale, h=img.height*scale;
                 ctx.drawImage(img,0,0,w,h);
+                imgData = ctx.getImageData(0,0,w,h);
             }
             img.src = e.target.result;
         }
@@ -57,39 +60,15 @@ function upload() {
     var form = new FormData();
     form.append('file', file);
     fetch('/upload', { method:'POST', body:form })
-    .then(res => res.json())
-    .then(data=>{
-        stitchData = data.stitches;
-        drawStitches();
-        downloadDST();
-    }).catch(e=>alert('خطأ: '+e));
-}
-
-function drawStitches() {
-    let canvas = document.getElementById('preview');
-    let ctx = canvas.getContext('2d');
-    ctx.clearRect(0,0,canvas.width,canvas.height);
-    ctx.fillStyle = '#00FF00';
-    for(let s of stitchData) {
-        ctx.fillRect(s[0], s[1], 1, 1);
-    }
-}
-
-function downloadDST() {
-    fetch('/download_dst', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({stitches: stitchData})
-    })
-    .then(res=>res.blob())
-    .then(blob=>{
+    .then(res => res.blob())
+    .then(blob => {
         var url = URL.createObjectURL(blob);
         var a = document.createElement('a');
         a.href = url;
         a.download = 'pattern.dst';
         a.click();
         alert('تم تنزيل ملف DST جاهز للماكينة');
-    });
+    }).catch(e=>alert('خطأ: '+e));
 }
 </script>
 </body>
@@ -116,29 +95,23 @@ def image_to_stitches_advanced(image):
     pattern = EmbPattern()
     step_satin = 2
     step_fill = 4
-    stitch_list = []
     for i in range(1,ncomponents+1):
         coords = np.argwhere(labeled==i)
         if len(coords)<50:
-            # Satin
+            # منطقة صغيرة -> Satin
             for y,x in coords[::step_satin]:
                 pattern.add_stitch_absolute(x,y)
-                stitch_list.append([x,y])
         else:
-            # Fill
+            # منطقة كبيرة -> Fill
             for y,x in coords[::step_fill]:
                 pattern.add_stitch_absolute(x,y)
-                stitch_list.append([x,y])
     if len(pattern.stitches)==0:
+        # غرزة تجريبية
         pattern.add_stitch_absolute(0,0)
         pattern.add_stitch_absolute(10,0)
         pattern.add_stitch_absolute(10,10)
         pattern.add_stitch_absolute(0,10)
-        stitch_list = [[0,0],[10,0],[10,10],[0,10]]
-    return pattern, stitch_list
-
-# حفظ بيانات الغرز في JSON لواجهة المعاينة
-stitch_cache = {}
+    return pattern
 
 @app.route('/')
 def index():
@@ -151,19 +124,7 @@ def upload():
     f = request.files['file']
     img = Image.open(f.stream).convert("RGB")
     img = remove_background(img)
-    pattern, stitches = image_to_stitches_advanced(img)
-    # حفظ مؤقت
-    key = str(uuid.uuid4())
-    stitch_cache[key] = pattern
-    return jsonify({'key':key, 'stitches': stitches})
-
-@app.route('/download_dst', methods=['POST'])
-def download_dst():
-    data = request.get_json()
-    key = data.get('key')
-    if key not in stitch_cache:
-        return jsonify({'error':'Invalid key'}),400
-    pattern = stitch_cache[key]
+    pattern = image_to_stitches_advanced(img)
     bio = BytesIO()
     write_dst(pattern, bio)
     bio.seek(0)
