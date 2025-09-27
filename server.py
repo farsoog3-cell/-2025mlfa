@@ -1,77 +1,107 @@
-from flask import Flask, request, send_file, render_template
-import io
-from PIL import Image
-import numpy as np
-import cv2
-import svgwrite
-from pyembroidery import EmbPattern, write_dst, write_dse, STITCH, COLOR_CHANGE
+from flask import Flask, render_template, request, jsonify, send_from_directory, url_for
+from werkzeug.utils import secure_filename
+import os, cv2
+from datetime import datetime
+from pyembroidery import EmbPattern, EmbThread, write_dst, write_exp
+from PIL import Image, ImageDraw
 
-app = Flask(__name__, template_folder="templates")
+UPLOAD_FOLDER = 'uploads'
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
 
-@app.route("/")
-def index():
-    return render_template("index.html")
+app = Flask(__name__, static_folder='static', template_folder='templates')
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-def image_to_segments(img, num_colors=8):
-    Z = img.reshape((-1,3))
-    Z = np.float32(Z)
-    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 20, 1.0)
-    _, label, center = cv2.kmeans(Z, num_colors, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
-    center = np.uint8(center)
-    segmented_img = center[label.flatten()].reshape(img.shape)
-    return segmented_img, label.reshape((img.shape[0], img.shape[1])), center
-
-def segmented_to_svg(segmented_img, labels, centers):
-    h, w, _ = segmented_img.shape
-    svg = svgwrite.Drawing(size=(w,h))
-    for i, color in enumerate(centers):
-        mask = (labels == i).astype(np.uint8) * 255
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        for contour in contours:
-            points = [(p[0][0], p[0][1]) for p in contour]
-            if len(points) > 1:
-                hex_color = '#%02x%02x%02x' % tuple(color)
-                svg.add(svg.polyline(points=points, stroke=hex_color, fill='none', stroke_width=1))
-    return svg
-
-def svg_to_pattern(svg):
-    pattern = EmbPattern()
-    last_color = None
-    for element in svg.elements:
-        if isinstance(element, svgwrite.shapes.Polyline):
-            stroke_color = element.stroke
-            if last_color != stroke_color:
-                pattern.add_stitch_absolute(COLOR_CHANGE, 0, 0)
-                last_color = stroke_color
-            for x, y in element.points:
-                pattern.add_stitch_absolute(STITCH, x, y)
-    return pattern
-
-@app.route("/convert", methods=["POST"])
-def convert():
+# ============== API تحويل صورة إلى تطريز ==============
+@app.route('/embroidery', methods=['POST'])
+def embroidery():
     if 'file' not in request.files:
-        return {"error": "لم يتم رفع أي ملف"}, 400
+        return jsonify({'success': False, 'error': 'No file'}), 400
     file = request.files['file']
-    file_type = request.form.get('type', 'dst')
-    img = np.array(Image.open(file).convert("RGB"))
+    fmt = request.form.get('format', 'dst').lower()
+    emb_type = request.form.get('embType', 'outline')  # outline / fill / both
 
-    segmented_img, labels, centers = image_to_segments(img, num_colors=8)
-    svg = segmented_to_svg(segmented_img, labels, centers)
-    pattern = svg_to_pattern(svg)
+    # حفظ الصورة
+    img_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(file.filename))
+    file.save(img_path)
 
-    out_buffer = io.BytesIO()
-    if file_type.lower() == 'dse':
-        write_dse(pattern, out_buffer)
+    # قراءة ومعالجة الصورة
+    img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+    img = cv2.resize(img, (300, 300))
+    _, thresh = cv2.threshold(img, 127, 255, cv2.THRESH_BINARY_INV)
+
+    # إنشاء النمط
+    pattern = EmbPattern()
+    thread = EmbThread()
+    thread.set_color(0, 0, 0)
+    pattern.add_thread(thread)
+
+    preview = Image.new("RGB", (300, 300), "white")
+    draw = ImageDraw.Draw(preview)
+
+    # ===== Outline =====
+    if emb_type in ["outline", "both"]:
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for contour in contours:
+            if len(contour) < 2:
+                continue
+            for i, pt in enumerate(contour):
+                x, y = pt[0]
+                if i == 0:
+                    pattern.add_stitch_absolute("JUMP", x, y)
+                else:
+                    pattern.add_stitch_absolute("STITCH", x, y)
+            draw.line([tuple(p[0]) for p in contour], fill="black", width=1)
+
+    # ===== Fill =====
+    if emb_type in ["fill", "both"]:
+        step = 5
+        for y in range(0, img.shape[0], step):
+            row = []
+            for x in range(img.shape[1]):
+                if thresh[y, x] == 255:  # داخل الشكل
+                    row.append((x, y))
+            if row:
+                pattern.add_stitch_absolute("JUMP", row[0][0], row[0][1])
+                for pt in row:
+                    pattern.add_stitch_absolute("STITCH", pt[0], pt[1])
+                draw.line(row, fill="black", width=1)
+
+    pattern.end()
+
+    # حفظ الملف DST/DSE
+    timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    if fmt == "dst":
+        filename = f"pattern_{timestamp}.dst"
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        with open(filepath, "wb") as f:
+            write_dst(f, pattern)
     else:
-        write_dst(pattern, out_buffer)
-    out_buffer.seek(0)
+        filename = f"pattern_{timestamp}.exp"  # EXP بديل لـ DSE
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        with open(filepath, "wb") as f:
+            write_exp(f, pattern)
 
-    return send_file(
-        out_buffer,
-        mimetype="application/octet-stream",
-        as_attachment=True,
-        download_name=f'pattern.{file_type.lower()}'
-    )
+    # حفظ معاينة
+    preview_name = f"preview_{timestamp}.png"
+    preview_path = os.path.join(app.config['UPLOAD_FOLDER'], preview_name)
+    preview.save(preview_path)
 
-if __name__ == "__main__":
+    return jsonify({
+        "success": True,
+        "preview_url": url_for("uploaded_file", filename=preview_name),
+        "download_url": url_for("uploaded_file", filename=filename)
+    })
+
+# =======================================================
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/uploads/<path:filename>')
+def uploaded_file(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
+if __name__ == '__main__':
     app.run(host="0.0.0.0", port=5000, debug=True)
