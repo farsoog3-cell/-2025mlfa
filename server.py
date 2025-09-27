@@ -12,17 +12,23 @@ if not os.path.exists(UPLOAD_FOLDER):
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
+@app.route('/')
+def index():
+    return render_template('index.html')
+
 @app.route('/embroidery', methods=['POST'])
 def embroidery():
     if 'file' not in request.files:
-        return jsonify({'success': False, 'error': 'No file'}), 400
+        return jsonify({'success': False, 'error': 'No file uploaded'}), 400
     file = request.files['file']
     fmt = request.form.get('format', 'dst').lower()
-    emb_type = request.form.get('embType', 'outline')  # outline / fill / both
+    emb_type = request.form.get('embType', 'outline')
 
+    # حفظ الصورة المرفوعة
     img_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(file.filename))
     file.save(img_path)
 
+    # معالجة الصورة
     img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
     img = cv2.resize(img, (300, 300))
     _, thresh = cv2.threshold(img, 127, 255, cv2.THRESH_BINARY_INV)
@@ -81,10 +87,6 @@ def embroidery():
         "preview_url": url_for("uploaded_file", filename=preview_name),
         "download_url": url_for("uploaded_file", filename=filename)
     })
-
-@app.route('/')
-def index():
-    return render_template('index.html')
 
 @app.route('/uploads/<path:filename>')
 def uploaded_file(filename):
