@@ -3,3 +3,4 @@ flask-cors
 pyembroidery
 pillow
 numpy
+scikit-learn
