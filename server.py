@@ -20,16 +20,13 @@ def embroidery():
     fmt = request.form.get('format', 'dst').lower()
     emb_type = request.form.get('embType', 'outline')  # outline / fill / both
 
-    # حفظ الصورة المرفوعة
     img_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(file.filename))
     file.save(img_path)
 
-    # معالجة الصورة
     img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
     img = cv2.resize(img, (300, 300))
     _, thresh = cv2.threshold(img, 127, 255, cv2.THRESH_BINARY_INV)
 
-    # إنشاء النمط
     pattern = EmbPattern()
     thread = EmbThread()
     thread.set_color(0, 0, 0)
@@ -38,7 +35,6 @@ def embroidery():
     preview = Image.new("RGB", (300, 300), "white")
     draw = ImageDraw.Draw(preview)
 
-    # ===== Outline =====
     if emb_type in ["outline", "both"]:
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for contour in contours:
@@ -52,7 +48,6 @@ def embroidery():
                     pattern.add_stitch_absolute("STITCH", x, y)
             draw.line([tuple(p[0]) for p in contour], fill="black", width=1)
 
-    # ===== Fill =====
     if emb_type in ["fill", "both"]:
         step = 5
         for y in range(0, img.shape[0], step):
