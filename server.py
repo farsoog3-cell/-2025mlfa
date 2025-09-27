@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from pyembroidery import EmbPattern, write_dst, write_dsb, EmbThread
+from pyembroidery import EmbPattern, write_dst, EmbThread
 from PIL import Image
 import numpy as np
 from io import BytesIO
@@ -10,6 +10,9 @@ app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 def create_embroidery_pattern(image, max_colors=5, step=2):
+    """
+    تحويل الصورة إلى قالب تطريز DST
+    """
     image = image.resize((200,200)).convert("RGB")
     pixels = np.array(image)
     pattern = EmbPattern()
@@ -47,6 +50,7 @@ def upload():
     try:
         if 'file' not in request.files:
             return jsonify({'error':'No file uploaded'}),400
+
         file = request.files['file']
         format_selected = request.form.get('format','DST').upper()
         img = Image.open(file.stream).convert('RGB')
@@ -54,10 +58,8 @@ def upload():
         pattern, stitch_points = create_embroidery_pattern(img)
 
         bio = BytesIO()
-        if format_selected == 'DST':
-            write_dst(pattern,bio)
-        else:
-            write_dsb(pattern,bio)
+        # دعم صيغة DST فقط
+        write_dst(pattern, bio)
         bio.seek(0)
         file_b64 = base64.b64encode(bio.getvalue()).decode('utf-8')
         preview_b64 = encode_image_to_base64(img)
@@ -66,7 +68,7 @@ def upload():
             'file_base64': file_b64,
             'preview_image': preview_b64,
             'stitch_points': stitch_points,
-            'filename': f"{file.filename.split('.')[0]}.{format_selected.lower()}"
+            'filename': f"{file.filename.split('.')[0]}.dst"
         })
     except Exception as e:
         return jsonify({'error':str(e)}),500
