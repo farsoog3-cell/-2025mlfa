@@ -1,6 +1,6 @@
 from flask import Flask, request, send_file, jsonify
 from flask_cors import CORS
-from pyembroidery import EmbPattern, write_dst, EmbThread
+from pyembroidery import EmbPattern, write_dst, write_dse, EmbThread
 from PIL import Image, ImageOps
 import numpy as np
 from io import BytesIO
@@ -9,39 +9,34 @@ app = Flask(__name__)
 CORS(app)
 
 def remove_background(image):
-    """تحويل الصورة إلى أبيض وأسود وإزالة الخلفية البيضاء"""
-    # تحويل للصورة رمادي
+    """تحويل الصورة لأبيض وأسود وإزالة الخلفية البيضاء"""
     gray = image.convert("L")
-    # Threshold
     bw = gray.point(lambda x: 0 if x < 128 else 255, '1')
-    # إزالة الحواف البيضاء
     bbox = bw.getbbox()
     if bbox:
         bw = bw.crop(bbox)
     return bw
 
-def generate_stitches(image):
-    """إنشاء ملف DST مع مسار كامل وغرز ساتان يمين/يسار"""
+def generate_stitches(image, file_type="DST"):
+    """إنشاء ملف DST أو DSE مع غرز ساتان وملء الصورة"""
     pattern = EmbPattern()
     thread = EmbThread()
     thread.set_color(0,0,0)  # أسود
     pattern.add_thread(thread)
 
-    img = image
-    pixels = np.array(img)
+    pixels = np.array(image)
     height, width = pixels.shape
 
-    step = 2  # حجم الغرزة
+    step = 2
 
-    # توليد الغرز يمين ويسار لملء الصورة
     for y in range(0, height, step):
-        direction = 1 if y % 4 == 0 else -1  # تغيير الاتجاه
+        direction = 1 if (y//step)%2==0 else -1
         for x in range(0, width, step):
-            px = x if direction == 1 else width - x - 1
-            if pixels[y, px] == 0:  # أسود
+            px = x if direction==1 else width - x -1
+            if pixels[y, px] == 0:
                 pattern.add_stitch_absolute(px, y)
 
-    # إضافة إطار حول القالب
+    # إطار حول القالب
     pattern.add_stitch_absolute(0,0)
     pattern.add_stitch_absolute(width-1,0)
     pattern.add_stitch_absolute(width-1,height-1)
@@ -50,7 +45,10 @@ def generate_stitches(image):
 
     pattern.end()
     bio = BytesIO()
-    write_dst(pattern, bio)
+    if file_type.upper()=="DSE":
+        write_dse(pattern, bio)
+    else:
+        write_dst(pattern, bio)
     bio.seek(0)
     return bio
 
@@ -59,14 +57,14 @@ def upload():
     if 'file' not in request.files:
         return jsonify({'error':'No file uploaded'}), 400
     file = request.files['file']
-
+    file_type = request.form.get('type','DST').upper()
     try:
         img = Image.open(file.stream).convert("RGB")
         img = remove_background(img)
-        dst_file = generate_stitches(img)
+        emb_file = generate_stitches(img, file_type)
         return send_file(
-            dst_file,
-            download_name='pattern.dst',
+            emb_file,
+            download_name=f'pattern.{file_type.lower()}',
             mimetype='application/octet-stream'
         )
     except Exception as e:
