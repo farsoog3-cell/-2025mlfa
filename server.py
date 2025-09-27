@@ -1,7 +1,6 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from pyembroidery import EmbPattern, write_dst, EmbThread
-from pyembroidery.pattern import CMD_JUMP
 from PIL import Image
 import numpy as np
 from io import BytesIO
@@ -30,8 +29,8 @@ def create_colored_pattern(image):
                 if np.allclose(pixels[y, x], color, atol=40):
                     row_points.append((x, y))
             if row_points:
-                pattern.add_command(CMD_JUMP)
-                pattern.add_stitch_absolute(*row_points[0])
+                # القفز إلى النقطة الأولى من الصف
+                pattern.add_jump_absolute(*row_points[0])
                 stitch_points.append({'x': row_points[0][0], 'y': row_points[0][1]})
                 for (x, y) in row_points[1:]:
                     pattern.add_stitch_absolute(x, y)
