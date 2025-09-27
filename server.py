@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from pyembroidery import EmbPattern, write_dst, EmbThread
+from pyembroidery.constants import COMMAND_JUMP
 from PIL import Image
 import numpy as np
 from io import BytesIO
@@ -28,7 +29,8 @@ def create_embroidery_pattern(image, max_colors=5, step=2):
                 if np.allclose(pixels[y,x], color, atol=40):
                     row_points.append((x,y))
             if row_points:
-                pattern.add_jump_absolute(*row_points[0])
+                # قفزة إلى النقطة الأولى من الصف
+                pattern.add_stitch_absolute(row_points[0][0], row_points[0][1], flags=COMMAND_JUMP)
                 stitch_points.append({'x': row_points[0][0], 'y': row_points[0][1]})
                 for (x,y) in row_points[1:]:
                     pattern.add_stitch_absolute(x,y)
@@ -45,22 +47,21 @@ def encode_image_to_base64(image):
 def upload():
     try:
         if 'file' not in request.files:
-            return jsonify({'error': 'No file uploaded'}), 400
+            return jsonify({'error':'No file uploaded'}),400
         file = request.files['file']
-        format_selected = request.form.get('format', 'DST').upper()
+        format_selected = request.form.get('format','DST').upper()
         img = Image.open(file.stream).convert('RGB')
 
         pattern, stitch_points = create_embroidery_pattern(img)
 
         bio = BytesIO()
         if format_selected == 'DST':
-            write_dst(pattern, bio)
+            write_dst(pattern,bio)
         else:
             from pyembroidery import write_dsb
-            write_dsb(pattern, bio)  # بديل DSE
+            write_dsb(pattern,bio)
         bio.seek(0)
         file_b64 = base64.b64encode(bio.getvalue()).decode('utf-8')
-
         preview_b64 = encode_image_to_base64(img)
 
         return jsonify({
@@ -70,7 +71,7 @@ def upload():
             'filename': f"{file.filename.split('.')[0]}.{format_selected.lower()}"
         })
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error':str(e)}),500
 
-if __name__ == "__main__":
+if __name__=="__main__":
     app.run(host="0.0.0.0", port=5000)
