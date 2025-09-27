@@ -1,5 +1,5 @@
 Flask==3.0.0
 Werkzeug==3.0.1
-pyembroidery==1.5.31
 Pillow==10.0.0
 opencv-python==4.8.0.76
+git+https://github.com/Embroidermodder/pyembroidery.git
