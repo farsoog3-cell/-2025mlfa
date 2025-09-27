@@ -12,7 +12,6 @@ if not os.path.exists(UPLOAD_FOLDER):
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-# ============== API تحويل صورة إلى تطريز ==============
 @app.route('/embroidery', methods=['POST'])
 def embroidery():
     if 'file' not in request.files:
@@ -21,16 +20,13 @@ def embroidery():
     fmt = request.form.get('format', 'dst').lower()
     emb_type = request.form.get('embType', 'outline')  # outline / fill / both
 
-    # حفظ الصورة
     img_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(file.filename))
     file.save(img_path)
 
-    # قراءة ومعالجة الصورة
     img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
     img = cv2.resize(img, (300, 300))
     _, thresh = cv2.threshold(img, 127, 255, cv2.THRESH_BINARY_INV)
 
-    # إنشاء النمط
     pattern = EmbPattern()
     thread = EmbThread()
     thread.set_color(0, 0, 0)
@@ -59,7 +55,7 @@ def embroidery():
         for y in range(0, img.shape[0], step):
             row = []
             for x in range(img.shape[1]):
-                if thresh[y, x] == 255:  # داخل الشكل
+                if thresh[y, x] == 255:
                     row.append((x, y))
             if row:
                 pattern.add_stitch_absolute("JUMP", row[0][0], row[0][1])
@@ -69,31 +65,24 @@ def embroidery():
 
     pattern.end()
 
-    # حفظ الملف DST/DSE
     timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
     if fmt == "dst":
         filename = f"pattern_{timestamp}.dst"
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        with open(filepath, "wb") as f:
+        with open(os.path.join(app.config['UPLOAD_FOLDER'], filename), "wb") as f:
             write_dst(f, pattern)
     else:
-        filename = f"pattern_{timestamp}.exp"  # EXP بديل لـ DSE
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        with open(filepath, "wb") as f:
+        filename = f"pattern_{timestamp}.exp"
+        with open(os.path.join(app.config['UPLOAD_FOLDER'], filename), "wb") as f:
             write_exp(f, pattern)
 
-    # حفظ معاينة
     preview_name = f"preview_{timestamp}.png"
-    preview_path = os.path.join(app.config['UPLOAD_FOLDER'], preview_name)
-    preview.save(preview_path)
+    preview.save(os.path.join(app.config['UPLOAD_FOLDER'], preview_name))
 
     return jsonify({
         "success": True,
         "preview_url": url_for("uploaded_file", filename=preview_name),
         "download_url": url_for("uploaded_file", filename=filename)
     })
-
-# =======================================================
 
 @app.route('/')
 def index():
