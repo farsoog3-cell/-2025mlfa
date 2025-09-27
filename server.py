@@ -24,7 +24,7 @@ def embroidery():
     fmt = request.form.get('format', 'dst').lower()
     emb_type = request.form.get('embType', 'outline')
 
-    # حفظ الصورة المرفوعة
+    # حفظ الصورة
     img_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(file.filename))
     file.save(img_path)
 
@@ -57,10 +57,7 @@ def embroidery():
     if emb_type in ["fill", "both"]:
         step = 5
         for y in range(0, img.shape[0], step):
-            row = []
-            for x in range(img.shape[1]):
-                if thresh[y, x] == 255:
-                    row.append((x, y))
+            row = [(x, y) for x in range(img.shape[1]) if thresh[y, x] == 255]
             if row:
                 pattern.add_stitch_absolute("JUMP", row[0][0], row[0][1])
                 for pt in row:
