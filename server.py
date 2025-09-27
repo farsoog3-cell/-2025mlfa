@@ -1,7 +1,6 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from pyembroidery import EmbPattern, write_dst, EmbThread
-from pyembroidery.constants import COMMAND_JUMP
+from pyembroidery import EmbPattern, write_dst, write_dsb, EmbThread
 from PIL import Image
 import numpy as np
 from io import BytesIO
@@ -29,8 +28,8 @@ def create_embroidery_pattern(image, max_colors=5, step=2):
                 if np.allclose(pixels[y,x], color, atol=40):
                     row_points.append((x,y))
             if row_points:
-                # قفزة إلى النقطة الأولى من الصف
-                pattern.add_stitch_absolute(row_points[0][0], row_points[0][1], flags=COMMAND_JUMP)
+                # استخدم add_jump بدلاً من COMMAND_JUMP
+                pattern.add_jump(row_points[0][0], row_points[0][1])
                 stitch_points.append({'x': row_points[0][0], 'y': row_points[0][1]})
                 for (x,y) in row_points[1:]:
                     pattern.add_stitch_absolute(x,y)
@@ -58,7 +57,6 @@ def upload():
         if format_selected == 'DST':
             write_dst(pattern,bio)
         else:
-            from pyembroidery import write_dsb
             write_dsb(pattern,bio)
         bio.seek(0)
         file_b64 = base64.b64encode(bio.getvalue()).decode('utf-8')
