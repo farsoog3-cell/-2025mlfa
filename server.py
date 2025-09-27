@@ -41,6 +41,7 @@ def embroidery():
     preview = Image.new("RGB", (300, 300), "white")
     draw = ImageDraw.Draw(preview)
 
+    # حدود التطريز
     if emb_type in ["outline", "both"]:
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for contour in contours:
@@ -54,6 +55,7 @@ def embroidery():
                     pattern.add_stitch_absolute("STITCH", x, y)
             draw.line([tuple(p[0]) for p in contour], fill="black", width=1)
 
+    # تعبئة التطريز
     if emb_type in ["fill", "both"]:
         step = 5
         for y in range(0, img.shape[0], step):
@@ -91,5 +93,5 @@ def uploaded_file(filename):
 
 if __name__ == '__main__':
     import os
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 5000))  # مناسب لـ Render أو VPS
     app.run(host="0.0.0.0", port=port)
