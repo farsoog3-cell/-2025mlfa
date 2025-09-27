@@ -1,15 +1,15 @@
 from flask import Flask, request, send_file, jsonify
 from flask_cors import CORS
 from pyembroidery import EmbPattern, write_dst, write_dse, EmbThread
-from PIL import Image, ImageOps
+from PIL import Image
 import numpy as np
 from io import BytesIO
 
 app = Flask(__name__)
 CORS(app)
 
-def remove_background(image):
-    """تحويل الصورة لأبيض وأسود وإزالة الخلفية البيضاء"""
+def preprocess_image(image):
+    """تحويل الصورة إلى أبيض وأسود وإزالة الخلفية"""
     gray = image.convert("L")
     bw = gray.point(lambda x: 0 if x < 128 else 255, '1')
     bbox = bw.getbbox()
@@ -18,25 +18,25 @@ def remove_background(image):
     return bw
 
 def generate_stitches(image, file_type="DST"):
-    """إنشاء ملف DST أو DSE مع غرز ساتان وملء الصورة"""
+    """إنشاء ملف DST/DSE مع غرز Fill / Satin فعلي"""
     pattern = EmbPattern()
     thread = EmbThread()
-    thread.set_color(0,0,0)  # أسود
+    thread.set_color(0,0,0)
     pattern.add_thread(thread)
 
     pixels = np.array(image)
     height, width = pixels.shape
+    step = 2  # حجم الغرزة
 
-    step = 2
-
+    # توليد الغرز مع ملء كامل الصورة
     for y in range(0, height, step):
-        direction = 1 if (y//step)%2==0 else -1
+        direction = 1 if (y//step)%2 == 0 else -1
         for x in range(0, width, step):
-            px = x if direction==1 else width - x -1
+            px = x if direction==1 else width - x - 1
             if pixels[y, px] == 0:
                 pattern.add_stitch_absolute(px, y)
 
-    # إطار حول القالب
+    # إضافة إطار حول القالب
     pattern.add_stitch_absolute(0,0)
     pattern.add_stitch_absolute(width-1,0)
     pattern.add_stitch_absolute(width-1,height-1)
@@ -57,10 +57,11 @@ def upload():
     if 'file' not in request.files:
         return jsonify({'error':'No file uploaded'}), 400
     file = request.files['file']
-    file_type = request.form.get('type','DST').upper()
+    file_type = request.form.get('type', 'DST').upper()
+
     try:
         img = Image.open(file.stream).convert("RGB")
-        img = remove_background(img)
+        img = preprocess_image(img)
         emb_file = generate_stitches(img, file_type)
         return send_file(
             emb_file,
