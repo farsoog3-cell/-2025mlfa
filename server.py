@@ -9,7 +9,7 @@ app = Flask(__name__)
 CORS(app)
 
 def preprocess_image(image):
-    """تحويل الصورة إلى أبيض وأسود وإزالة الخلفية"""
+    """تحويل الصورة إلى أبيض وأسود وإزالة الخلفية البيضاء"""
     gray = image.convert("L")
     bw = gray.point(lambda x: 0 if x < 128 else 255, '1')
     bbox = bw.getbbox()
@@ -17,35 +17,35 @@ def preprocess_image(image):
         bw = bw.crop(bbox)
     return bw
 
-def generate_stitches(image, file_type="DST"):
-    """إنشاء ملف DST/DSE مع غرز Fill / Satin فعلي"""
+def generate_embroidery_pattern(image, file_type="DST"):
+    """توليد مسار غرز حقيقي"""
     pattern = EmbPattern()
     thread = EmbThread()
-    thread.set_color(0,0,0)
+    thread.set_color(0, 0, 0)
     pattern.add_thread(thread)
 
     pixels = np.array(image)
     height, width = pixels.shape
     step = 2  # حجم الغرزة
 
-    # توليد الغرز مع ملء كامل الصورة
+    # توليد الغرز مع اتجاه الإبرة يمين/يسار لتغطية الصورة بالكامل
     for y in range(0, height, step):
-        direction = 1 if (y//step)%2 == 0 else -1
+        direction = 1 if (y // step) % 2 == 0 else -1
         for x in range(0, width, step):
-            px = x if direction==1 else width - x - 1
+            px = x if direction == 1 else width - x - 1
             if pixels[y, px] == 0:
                 pattern.add_stitch_absolute(px, y)
 
-    # إضافة إطار حول القالب
-    pattern.add_stitch_absolute(0,0)
-    pattern.add_stitch_absolute(width-1,0)
-    pattern.add_stitch_absolute(width-1,height-1)
-    pattern.add_stitch_absolute(0,height-1)
-    pattern.add_stitch_absolute(0,0)
+    # إطار حول القالب
+    pattern.add_stitch_absolute(0, 0)
+    pattern.add_stitch_absolute(width - 1, 0)
+    pattern.add_stitch_absolute(width - 1, height - 1)
+    pattern.add_stitch_absolute(0, height - 1)
+    pattern.add_stitch_absolute(0, 0)
 
     pattern.end()
     bio = BytesIO()
-    if file_type.upper()=="DSE":
+    if file_type.upper() == "DSE":
         write_dse(pattern, bio)
     else:
         write_dst(pattern, bio)
@@ -55,14 +55,14 @@ def generate_stitches(image, file_type="DST"):
 @app.route('/upload', methods=['POST'])
 def upload():
     if 'file' not in request.files:
-        return jsonify({'error':'No file uploaded'}), 400
+        return jsonify({'error': 'No file uploaded'}), 400
     file = request.files['file']
     file_type = request.form.get('type', 'DST').upper()
 
     try:
         img = Image.open(file.stream).convert("RGB")
         img = preprocess_image(img)
-        emb_file = generate_stitches(img, file_type)
+        emb_file = generate_embroidery_pattern(img, file_type)
         return send_file(
             emb_file,
             download_name=f'pattern.{file_type.lower()}',
