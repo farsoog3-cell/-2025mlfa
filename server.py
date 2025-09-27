@@ -1,97 +1,162 @@
-from flask import Flask, render_template, request, jsonify, send_from_directory, url_for
-from werkzeug.utils import secure_filename
-import os, cv2
-from datetime import datetime
-from pyembroidery import EmbPattern, EmbThread, write_dst, write_exp
-from PIL import Image, ImageDraw
+const express = require('express');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const Jimp = require('jimp');
+const simplify = require('simplify-js');
 
-UPLOAD_FOLDER = 'uploads'
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
+const app = express();
+const PORT = process.env.PORT || 3000;
 
-app = Flask(__name__, static_folder='static', template_folder='templates')
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+const uploadDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 
-@app.route('/')
-def index():
-    return render_template('index.html')
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadDir),
+  filename: (req, file, cb) => {
+    const safeName = Date.now() + '-' + file.originalname.replace(/\s+/g, '_');
+    cb(null, safeName);
+  }
+});
+const upload = multer({ storage });
 
-@app.route('/embroidery', methods=['POST'])
-def embroidery():
-    if 'file' not in request.files:
-        return jsonify({'success': False, 'error': 'No file uploaded'}), 400
-    file = request.files['file']
-    fmt = request.form.get('format', 'dst').lower()
-    emb_type = request.form.get('embType', 'outline')
+app.use(express.static(path.join(__dirname, 'public')));
+app.use('/uploads', express.static(uploadDir));
 
-    # حفظ الصورة
-    img_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(file.filename))
-    file.save(img_path)
+// --- معالجة الصور ---
+async function imageToBinaryPoints(filePath, resizeMax = 300, threshold = 128, log=[]) {
+  log.push("جاري قراءة الصورة...");
+  const img = await Jimp.read(filePath);
+  const scale = Math.min(1, resizeMax / Math.max(img.bitmap.width, img.bitmap.height));
+  if (scale < 1) {
+    img.resize(Math.round(img.bitmap.width * scale), Math.round(img.bitmap.height * scale));
+    log.push(`تم تصغير الصورة إلى ${img.bitmap.width}x${img.bitmap.height}`);
+  }
+  img.grayscale();
+  log.push("تم تحويل الصورة إلى رمادي.");
 
-    # معالجة الصورة
-    img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
-    img = cv2.resize(img, (300, 300))
-    _, thresh = cv2.threshold(img, 127, 255, cv2.THRESH_BINARY_INV)
+  const width = img.bitmap.width;
+  const height = img.bitmap.height;
+  const binary = new Uint8Array(width * height);
 
-    pattern = EmbPattern()
-    thread = EmbThread()
-    thread.set_color(0, 0, 0)
-    pattern.add_thread(thread)
+  img.scan(0, 0, width, height, function (x, y, idx) {
+    const v = this.bitmap.data[idx];
+    binary[y * width + x] = v < threshold ? 1 : 0;
+  });
+  log.push("تم استخراج النقاط الثنائية (Binary Points).");
 
-    preview = Image.new("RGB", (300, 300), "white")
-    draw = ImageDraw.Draw(preview)
+  const points = [];
+  const neighbors = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
+      if (binary[idx] === 1) {
+        let isEdge = false;
+        for (const [dx,dy] of neighbors) {
+          const nx = x + dx, ny = y + dy;
+          if (nx < 0 || nx >= width || ny < 0 || ny >= height) { isEdge = true; break; }
+          if (binary[ny * width + nx] === 0) { isEdge = true; break; }
+        }
+        if (isEdge) points.push({ x, y });
+      }
+    }
+  }
+  log.push(`تم تحديد ${points.length} نقطة على شكل مخطط التطريز.`);
+  return { points, width, height };
+}
 
-    # حدود التطريز
-    if emb_type in ["outline", "both"]:
-        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        for contour in contours:
-            if len(contour) < 2:
-                continue
-            for i, pt in enumerate(contour):
-                x, y = pt[0]
-                if i == 0:
-                    pattern.add_stitch_absolute("JUMP", x, y)
-                else:
-                    pattern.add_stitch_absolute("STITCH", x, y)
-            draw.line([tuple(p[0]) for p in contour], fill="black", width=1)
+function generatePathsFromPoints(points, width, height, log=[]) {
+  if (!points || points.length === 0) {
+    log.push("لا توجد نقاط لإنشاء مسار.");
+    return [];
+  }
 
-    # تعبئة التطريز
-    if emb_type in ["fill", "both"]:
-        step = 5
-        for y in range(0, img.shape[0], step):
-            row = [(x, y) for x in range(img.shape[1]) if thresh[y, x] == 255]
-            if row:
-                pattern.add_stitch_absolute("JUMP", row[0][0], row[0][1])
-                for pt in row:
-                    pattern.add_stitch_absolute("STITCH", pt[0], pt[1])
-                draw.line(row, fill="black", width=1)
+  const rows = new Map();
+  for (const p of points) {
+    if (!rows.has(p.y)) rows.set(p.y, []);
+    rows.get(p.y).push(p.x);
+  }
+  const path = [];
+  const sortedY = Array.from(rows.keys()).sort((a,b)=>a-b);
+  for (const y of sortedY) {
+    const xs = rows.get(y);
+    const avgX = xs.reduce((a,b)=>a+b,0)/xs.length;
+    path.push({ x: avgX, y });
+  }
 
-    pattern.end()
+  const simplified = simplify(path, 1.0, true);
+  log.push("تم تبسيط المسار (Simplify Path).");
+  return [ simplified ];
+}
 
-    timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
-    if fmt == "dst":
-        filename = f"pattern_{timestamp}.dst"
-        with open(os.path.join(app.config['UPLOAD_FOLDER'], filename), "wb") as f:
-            write_dst(f, pattern)
-    else:
-        filename = f"pattern_{timestamp}.exp"
-        with open(os.path.join(app.config['UPLOAD_FOLDER'], filename), "wb") as f:
-            write_exp(f, pattern)
+function exportStitchesCSV(pathPoints, outPath) {
+  const lines = pathPoints.map(p => `${Math.round(p.x)},${Math.round(p.y)}`);
+  fs.writeFileSync(outPath, lines.join('\n'), 'utf8');
+}
 
-    preview_name = f"preview_{timestamp}.png"
-    preview.save(os.path.join(app.config['UPLOAD_FOLDER'], preview_name))
+function exportFakeDST(pathPoints, outPath) {
+  const bufArr = [];
+  for (const p of pathPoints) {
+    const x = Math.round(p.x);
+    const y = Math.round(p.y);
+    const b = Buffer.alloc(8);
+    b.writeInt32LE(x, 0);
+    b.writeInt32LE(y, 4);
+    bufArr.push(b);
+  }
+  const finalBuf = Buffer.concat(bufArr);
+  fs.writeFileSync(outPath, finalBuf);
+}
 
-    return jsonify({
-        "success": True,
-        "preview_url": url_for("uploaded_file", filename=preview_name),
-        "download_url": url_for("uploaded_file", filename=filename)
-    })
+function exportDSE(pathPoints, outPath, meta = {}) {
+  const payload = {
+    points: pathPoints.map(p => ({ x: Math.round(p.x), y: Math.round(p.y) })),
+    meta
+  };
+  fs.writeFileSync(outPath, JSON.stringify(payload, null, 2), 'utf8');
+}
 
-@app.route('/uploads/<path:filename>')
-def uploaded_file(filename):
-    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+app.post('/upload', upload.single('image'), async (req, res) => {
+  const log = [];
+  try {
+    if (!req.file) return res.status(400).json({ error: 'لم يتم رفع ملف.' });
+    log.push(`تم رفع الملف: ${req.file.originalname}`);
 
-if __name__ == '__main__':
-    import os
-    port = int(os.environ.get("PORT", 5000))  # مناسب لـ Render أو VPS
-    app.run(host="0.0.0.0", port=port)
+    const filePath = req.file.path;
+    const { points, width, height } = await imageToBinaryPoints(filePath, 300, 128, log);
+    const paths = generatePathsFromPoints(points, width, height, log);
+
+    if (paths.length === 0) return res.json({ message: 'لا توجد نقاط كافية.', files: [], log });
+
+    const combinedPath = [];
+    for (const p of paths) combinedPath.push(...p);
+
+    const base = path.parse(req.file.filename).name;
+    const csvPath = path.join(uploadDir, `${base}.stitches.csv`);
+    const dstPath = path.join(uploadDir, `${base}.dst`);
+    const dsePath = path.join(uploadDir, `${base}.dse.json`);
+
+    exportStitchesCSV(combinedPath, csvPath);
+    exportFakeDST(combinedPath, dstPath);
+    exportDSE(combinedPath, dsePath, { source: req.file.originalname, width, height });
+    log.push("تم تصدير جميع ملفات التطريز (CSV, DST, DSE).");
+
+    res.json({
+      message: 'تمت المعالجة بنجاح!',
+      files: {
+        stitches_csv: `/uploads/${path.basename(csvPath)}`,
+        dst: `/uploads/${path.basename(dstPath)}`,
+        dse: `/uploads/${path.basename(dsePath)}`
+      },
+      log,
+      previewPoints: combinedPath
+    });
+
+  } catch (err) {
+    console.error(err);
+    log.push('حدث خطأ أثناء المعالجة.');
+    res.status(500).json({ error: 'حدث خطأ أثناء المعالجة.', log });
+  }
+});
+
+app.listen(PORT, () => console.log(`MLFA Server running on port ${PORT}`));
