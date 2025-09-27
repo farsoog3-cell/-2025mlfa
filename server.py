@@ -1,77 +1,96 @@
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-from pyembroidery import EmbPattern, write_dst, EmbThread
+from flask import Flask, request, send_file, jsonify
+import io
 from PIL import Image
 import numpy as np
-from io import BytesIO
-import base64
+import cv2
+import svgwrite
+from pyembroidery import EmbPattern, write_dst, write_dse, STITCH, COLOR_CHANGE
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
 
-def create_embroidery_pattern(image, max_colors=5, step=2):
+@app.route("/")
+def index():
+    return "خادم التطريز AI جاهز ✅"
+
+def image_to_segments(img, num_colors=5):
     """
-    تحويل الصورة إلى قالب تطريز DST
+    تقسيم الصورة إلى مناطق/ألوان رئيسية باستخدام K-means
+    لتسهيل تحويل الصورة إلى تطريز.
     """
-    image = image.resize((200,200)).convert("RGB")
-    pixels = np.array(image)
+    Z = img.reshape((-1,3))
+    Z = np.float32(Z)
+    
+    # K-means لتحديد الألوان الرئيسية
+    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 20, 1.0)
+    K = num_colors
+    _, label, center = cv2.kmeans(Z, K, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
+    
+    center = np.uint8(center)
+    res = center[label.flatten()]
+    segmented_img = res.reshape((img.shape))
+    return segmented_img, label.reshape((img.shape[0], img.shape[1])), center
+
+def segmented_to_svg(segmented_img, labels, centers):
+    """تحويل الصورة المقسمة إلى SVG مع كل لون كمسار"""
+    h, w, _ = segmented_img.shape
+    svg = svgwrite.Drawing(size=(w,h))
+    
+    for i, color in enumerate(centers):
+        mask = (labels == i).astype(np.uint8) * 255
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for contour in contours:
+            points = [(p[0][0], p[0][1]) for p in contour]
+            if len(points) > 1:
+                hex_color = '#%02x%02x%02x' % tuple(color)
+                svg.add(svg.polyline(points=points, stroke=hex_color, fill='none', stroke_width=1))
+    return svg
+
+def svg_to_pattern(svg):
+    """تحويل SVG إلى غرز مع دعم تغييرات اللون لكل منطقة"""
     pattern = EmbPattern()
-    unique_colors = np.unique(pixels.reshape(-1,3), axis=0)
-    stitch_points = []
+    last_color = None
+    for element in svg.elements:
+        if isinstance(element, svgwrite.shapes.Polyline):
+            stroke_color = element.stroke
+            if last_color != stroke_color:
+                pattern.add_stitch_absolute(COLOR_CHANGE, 0, 0)
+                last_color = stroke_color
+            points = element.points
+            for i, (x, y) in enumerate(points):
+                pattern.add_stitch_absolute(STITCH, x, y)
+    return pattern
 
-    for color in unique_colors[:max_colors]:
-        thread = EmbThread()
-        thread.set_color(int(color[0]), int(color[1]), int(color[2]))
-        thread.description = f"Thread {color}"
-        pattern.add_thread(thread)
+@app.route("/convert", methods=["POST"])
+def convert():
+    if 'file' not in request.files:
+        return jsonify({"error": "لم يتم رفع أي ملف"}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"error": "لم يتم اختيار ملف"}), 400
 
-        for y in range(0, pixels.shape[0], step):
-            row_points = []
-            for x in range(0, pixels.shape[1], step):
-                if np.allclose(pixels[y,x], color, atol=40):
-                    row_points.append((x,y))
-            if row_points:
-                # استخدم add_jump بدلاً من COMMAND_JUMP
-                pattern.add_jump(row_points[0][0], row_points[0][1])
-                stitch_points.append({'x': row_points[0][0], 'y': row_points[0][1]})
-                for (x,y) in row_points[1:]:
-                    pattern.add_stitch_absolute(x,y)
-                    stitch_points.append({'x': x, 'y': y})
+    file_type = request.form.get('type', 'dst')
 
-    return pattern, stitch_points
+    img = np.array(Image.open(file).convert("RGB"))
 
-def encode_image_to_base64(image):
-    buf = BytesIO()
-    image.save(buf, format="PNG")
-    return base64.b64encode(buf.getvalue()).decode('utf-8')
+    # تقسيم الصورة باستخدام AI (K-means)
+    segmented_img, labels, centers = image_to_segments(img, num_colors=8)
 
-@app.route('/upload', methods=['POST'])
-def upload():
-    try:
-        if 'file' not in request.files:
-            return jsonify({'error':'No file uploaded'}),400
+    # تحويل الصورة المقسمة إلى SVG
+    svg = segmented_to_svg(segmented_img, labels, centers)
 
-        file = request.files['file']
-        format_selected = request.form.get('format','DST').upper()
-        img = Image.open(file.stream).convert('RGB')
+    # تحويل SVG إلى غرز رقمية
+    pattern = svg_to_pattern(svg)
 
-        pattern, stitch_points = create_embroidery_pattern(img)
+    out_buffer = io.BytesIO()
+    if file_type.lower() == 'dse':
+        write_dse(pattern, out_buffer)
+    else:
+        write_dst(pattern, out_buffer)
+    out_buffer.seek(0)
 
-        bio = BytesIO()
-        # دعم صيغة DST فقط
-        write_dst(pattern, bio)
-        bio.seek(0)
-        file_b64 = base64.b64encode(bio.getvalue()).decode('utf-8')
-        preview_b64 = encode_image_to_base64(img)
+    return send_file(out_buffer, mimetype="application/octet-stream",
+                     as_attachment=True,
+                     download_name=f'pattern.{file_type.lower()}')
 
-        return jsonify({
-            'file_base64': file_b64,
-            'preview_image': preview_b64,
-            'stitch_points': stitch_points,
-            'filename': f"{file.filename.split('.')[0]}.dst"
-        })
-    except Exception as e:
-        return jsonify({'error':str(e)}),500
-
-if __name__=="__main__":
-    app.run(host="0.0.0.0", port=5000)
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
