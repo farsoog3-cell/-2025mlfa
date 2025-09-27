@@ -7,19 +7,18 @@ from io import BytesIO
 import base64
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*"}})  # السماح لجميع المواقع
 
 # إنشاء مخطط التطريز الملون
 def create_colored_pattern(image):
     image = image.resize((200, 200)).convert("RGB")
     pixels = np.array(image)
     pattern = EmbPattern()
-
     unique_colors = np.unique(pixels.reshape(-1, 3), axis=0)
     step = 3
     stitch_points = []
 
-    for color in unique_colors[:5]:
+    for color in unique_colors[:5]:  # استخدام أول 5 ألوان
         thread = EmbThread()
         thread.set_color(int(color[0]), int(color[1]), int(color[2]))
         thread.description = f"Thread {color}"
@@ -39,7 +38,7 @@ def create_colored_pattern(image):
                     stitch_points.append({'x': x, 'y': y})
     return pattern, stitch_points
 
-# إنشاء معاينة بالصور مباشرة كـ Base64
+# إنشاء معاينة بالصورة كـ Base64
 def get_preview_base64(image):
     buf = BytesIO()
     image.save(buf, format="PNG")
@@ -47,33 +46,31 @@ def get_preview_base64(image):
 
 @app.route('/upload', methods=['POST'])
 def upload():
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file uploaded'}), 400
-
-    file = request.files['file']
-    img = Image.open(file.stream).convert('RGB')
-    base_name = file.filename.split('.')[0]
-
     try:
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file uploaded'}), 400
+
+        file = request.files['file']
+        img = Image.open(file.stream).convert('RGB')
         pattern, stitch_points = create_colored_pattern(img)
+
+        # ملف DST في الذاكرة
+        bio = BytesIO()
+        write_dst(pattern, bio)
+        bio.seek(0)
+        dst_b64 = base64.b64encode(bio.getvalue()).decode('utf-8')
+
+        # معاينة الصورة
+        preview_b64 = get_preview_base64(img)
+
+        return jsonify({
+            'dst_file': dst_b64,
+            'preview_image': preview_b64,
+            'stitch_points': stitch_points,
+            'filename': f"{file.filename.split('.')[0]}.dst"
+        })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-
-    # ملف DST في الذاكرة
-    bio = BytesIO()
-    write_dst(pattern, bio)
-    bio.seek(0)
-    dst_b64 = base64.b64encode(bio.getvalue()).decode('utf-8')
-
-    # معاينة الصورة الأصلية
-    preview_b64 = get_preview_base64(img)
-
-    return jsonify({
-        'dst_file': dst_b64,
-        'preview_image': preview_b64,
-        'stitch_points': stitch_points,
-        'filename': f"{base_name}.dst"
-    })
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
