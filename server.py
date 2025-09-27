@@ -20,13 +20,16 @@ def embroidery():
     fmt = request.form.get('format', 'dst').lower()
     emb_type = request.form.get('embType', 'outline')  # outline / fill / both
 
+    # حفظ الصورة المرفوعة
     img_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(file.filename))
     file.save(img_path)
 
+    # معالجة الصورة
     img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
     img = cv2.resize(img, (300, 300))
     _, thresh = cv2.threshold(img, 127, 255, cv2.THRESH_BINARY_INV)
 
+    # إنشاء النمط
     pattern = EmbPattern()
     thread = EmbThread()
     thread.set_color(0, 0, 0)
