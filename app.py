@@ -12,12 +12,12 @@ if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-# --- معالجة الصورة ---
-def image_to_binary_points(file_path, resize_max=300, threshold=128, log=[]):
-    log.append("جاري قراءة الصورة...")
+# --- معالجة الصورة واستخراج الحواف ---
+def detect_edges(file_path, threshold=128, log=[]):
+    log.append("جاري تحويل الصورة إلى رمادية واستخراج الحواف...")
     img = Image.open(file_path).convert("L")
     w,h = img.size
-    scale = min(1, resize_max/max(w,h))
+    scale = min(1, 300/max(w,h))
     if scale < 1:
         img = img.resize((int(w*scale), int(h*scale)))
         log.append(f"تم تصغير الصورة إلى {img.size[0]}x{img.size[1]}")
@@ -33,34 +33,26 @@ def image_to_binary_points(file_path, resize_max=300, threshold=128, log=[]):
                 is_edge=False
                 for dx,dy in neighbors:
                     nx,ny=x+dx,y+dy
-                    if nx<0 or nx>=w or ny<0 or ny>=h:
-                        is_edge=True
-                        break
-                    if binary[ny,nx]==0:
+                    if nx<0 or nx>=w or ny<0 or ny>=h or binary[ny,nx]==0:
                         is_edge=True
                         break
                 if is_edge:
                     points.append({'x':x,'y':y})
-    log.append(f"تم تحديد {len(points)} نقطة على شكل مخطط التطريز.")
-    return points, img.size
+    log.append(f"تم استخراج {len(points)} نقطة للحواف.")
+    return points,img.size
 
-def generate_paths(points, log=[]):
+def generate_embroidery_path(points, log=[], epsilon=1.0):
     if not points:
-        log.append("لا توجد نقاط لإنشاء مسار.")
+        log.append("لا توجد نقاط لإنشاء مسار الإبرة.")
         return []
-    rows={}
-    for p in points:
-        rows.setdefault(p['y'], []).append(p['x'])
-    path=[]
-    for y in sorted(rows.keys()):
-        xs=rows[y]
-        avg_x=sum(xs)/len(xs)
-        path.append([avg_x,y])
-    simplified=rdp(path, epsilon=1.0)
+    sorted_points = sorted(points,key=lambda p:(p['y'],p['x']))
+    path=[[p['x'],p['y']] for p in sorted_points]
+    simplified=rdp(path,epsilon=epsilon)
     simplified_points=[{'x':p[0],'y':p[1]} for p in simplified]
-    log.append("تم تبسيط المسار باستخدام rdp.")
+    log.append(f"تم تبسيط مسار الإبرة إلى {len(simplified_points)} نقطة.")
     return simplified_points
 
+# --- تصدير الملفات ---
 def export_csv(points,path):
     with open(path,'w') as f:
         for p in points:
@@ -98,26 +90,33 @@ def upload_file():
     file.save(filepath)
     log.append(f"تم رفع الملف: {file.filename}")
 
-    points,size=image_to_binary_points(filepath,log=log)
-    path_points=generate_paths(points,log=log)
+    points,size=detect_edges(filepath,log=log)
+    path_points=generate_embroidery_path(points,log=log,epsilon=float(request.form.get("epsilon",1.0)))
 
     base=os.path.splitext(filename)[0]
     csv_path=os.path.join(app.config['UPLOAD_FOLDER'],f"{base}.stitches.csv")
     dst_path=os.path.join(app.config['UPLOAD_FOLDER'],f"{base}.dst")
     dse_path=os.path.join(app.config['UPLOAD_FOLDER'],f"{base}.dse.json")
 
-    export_csv(path_points,csv_path)
-    export_dst(path_points,dst_path)
-    export_dse(path_points,dse_path,meta={'source':file.filename,'size':size})
-    log.append("تم تصدير جميع ملفات التطريز (CSV, DST, DSE).")
+    export_format=request.form.get("format","dse")
+    if export_format=="csv":
+        export_csv(path_points,csv_path)
+    elif export_format=="dst":
+        export_dst(path_points,dst_path)
+    else:
+        export_dse(path_points,dse_path,meta={'source':file.filename,'size':size})
+
+    log.append(f"تم تصدير المخطط بصيغة {export_format.upper()}.")
+
+    files_dict={
+        'csv':f"/uploads/{base}.stitches.csv",
+        'dst':f"/uploads/{base}.dst",
+        'dse':f"/uploads/{base}.dse.json"
+    }
 
     return jsonify({
         'message':'تمت المعالجة بنجاح!',
-        'files':{
-            'stitches_csv':f"/uploads/{base}.stitches.csv",
-            'dst':f"/uploads/{base}.dst",
-            'dse':f"/uploads/{base}.dse.json"
-        },
+        'files':files_dict,
         'log':log,
         'previewPoints': path_points
     })
