@@ -1,4 +1,4 @@
-from flask import Flask, request, send_file, jsonify
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from pyembroidery import EmbPattern, write_dst, EmbThread, commands
 from PIL import Image
@@ -16,8 +16,9 @@ def create_colored_pattern(image):
     pattern = EmbPattern()
 
     unique_colors = np.unique(pixels.reshape(-1, 3), axis=0)
-
     step = 3
+    stitch_points = []
+
     for color in unique_colors[:5]:
         thread = EmbThread()
         thread.set_color(int(color[0]), int(color[1]), int(color[2]))
@@ -32,35 +33,17 @@ def create_colored_pattern(image):
             if row_points:
                 pattern.add_command(commands.CMD_JUMP)
                 pattern.add_stitch_absolute(*row_points[0])
+                stitch_points.append({'x': row_points[0][0], 'y': row_points[0][1]})
                 for (x, y) in row_points[1:]:
                     pattern.add_stitch_absolute(x, y)
-    return pattern
+                    stitch_points.append({'x': x, 'y': y})
+    return pattern, stitch_points
 
 # إنشاء معاينة بالصور مباشرة كـ Base64
-def get_previews_base64(image, pattern):
-    # معاينة التطريز الملون
-    preview_buf = BytesIO()
-    image.save(preview_buf, format="PNG")
-    preview_b64 = base64.b64encode(preview_buf.getvalue()).decode('utf-8')
-
-    # مخطط مسار الإبرة
-    import matplotlib.pyplot as plt
-    xs, ys = [], []
-    for st in pattern.stitches:
-        xs.append(st[0])
-        ys.append(st[1])
-
-    plt.figure(figsize=(6,6))
-    plt.imshow(np.array(image.convert("RGB")))
-    plt.plot(xs, ys, color="red", linewidth=0.8)
-    plt.axis("off")
-
-    path_buf = BytesIO()
-    plt.savefig(path_buf, format="PNG", bbox_inches='tight')
-    plt.close()
-    path_b64 = base64.b64encode(path_buf.getvalue()).decode('utf-8')
-
-    return preview_b64, path_b64
+def get_preview_base64(image):
+    buf = BytesIO()
+    image.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode('utf-8')
 
 @app.route('/upload', methods=['POST'])
 def upload():
@@ -71,11 +54,10 @@ def upload():
     img = Image.open(file.stream).convert('RGB')
     base_name = file.filename.split('.')[0]
 
-    # إنشاء المخطط
-    pattern = create_colored_pattern(img)
-
-    # توليد معاينات Base64
-    preview_b64, path_b64 = get_previews_base64(img, pattern)
+    try:
+        pattern, stitch_points = create_colored_pattern(img)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
     # ملف DST في الذاكرة
     bio = BytesIO()
@@ -83,10 +65,13 @@ def upload():
     bio.seek(0)
     dst_b64 = base64.b64encode(bio.getvalue()).decode('utf-8')
 
+    # معاينة الصورة الأصلية
+    preview_b64 = get_preview_base64(img)
+
     return jsonify({
         'dst_file': dst_b64,
         'preview_image': preview_b64,
-        'stitch_path': path_b64,
+        'stitch_points': stitch_points,
         'filename': f"{base_name}.dst"
     })
 
