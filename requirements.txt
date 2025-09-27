@@ -1,5 +1,6 @@
-flask
-flask-cors
-pyembroidery
-pillow
-numpy
+Flask==2.3.4
+Flask-Cors==3.0.10
+pyembroidery==1.6.0
+Pillow==10.1.0
+numpy==1.26.0
+scikit-learn==1.3.1
