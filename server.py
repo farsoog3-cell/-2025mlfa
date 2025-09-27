@@ -4,21 +4,17 @@ from pyembroidery import EmbPattern, write_dst, EmbThread, commands
 from PIL import Image
 import numpy as np
 from io import BytesIO
-import matplotlib.pyplot as plt
-import os
+import base64
 
 app = Flask(__name__)
 CORS(app)
-
-UPLOAD_FOLDER = "uploads"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # إنشاء مخطط التطريز الملون
 def create_colored_pattern(image):
     image = image.resize((200, 200)).convert("RGB")
     pixels = np.array(image)
     pattern = EmbPattern()
-    # استخراج الألوان الرئيسية (حتى 5 ألوان)
+
     unique_colors = np.unique(pixels.reshape(-1, 3), axis=0)
 
     step = 3
@@ -40,34 +36,31 @@ def create_colored_pattern(image):
                     pattern.add_stitch_absolute(x, y)
     return pattern
 
-# حفظ صور المعاينة
-def save_previews(image, pattern, base_name):
-    img_np = np.array(image.convert("RGB"))
-
-    preview_path = os.path.join(UPLOAD_FOLDER, f"{base_name}_preview.png")
-    path_path = os.path.join(UPLOAD_FOLDER, f"{base_name}_stitch_path.png")
-
-    # صورة التطريز الملون
-    plt.figure(figsize=(6,6))
-    plt.imshow(img_np)
-    plt.axis("off")
-    plt.savefig(preview_path, bbox_inches='tight')
-    plt.close()
+# إنشاء معاينة بالصور مباشرة كـ Base64
+def get_previews_base64(image, pattern):
+    # معاينة التطريز الملون
+    preview_buf = BytesIO()
+    image.save(preview_buf, format="PNG")
+    preview_b64 = base64.b64encode(preview_buf.getvalue()).decode('utf-8')
 
     # مخطط مسار الإبرة
+    import matplotlib.pyplot as plt
     xs, ys = [], []
     for st in pattern.stitches:
         xs.append(st[0])
         ys.append(st[1])
 
     plt.figure(figsize=(6,6))
-    plt.imshow(img_np)
+    plt.imshow(np.array(image.convert("RGB")))
     plt.plot(xs, ys, color="red", linewidth=0.8)
     plt.axis("off")
-    plt.savefig(path_path, bbox_inches='tight')
-    plt.close()
 
-    return preview_path, path_path
+    path_buf = BytesIO()
+    plt.savefig(path_buf, format="PNG", bbox_inches='tight')
+    plt.close()
+    path_b64 = base64.b64encode(path_buf.getvalue()).decode('utf-8')
+
+    return preview_b64, path_b64
 
 @app.route('/upload', methods=['POST'])
 def upload():
@@ -76,26 +69,26 @@ def upload():
 
     file = request.files['file']
     img = Image.open(file.stream).convert('RGB')
+    base_name = file.filename.split('.')[0]
 
-    base_name = os.path.splitext(file.filename)[0]
-
-    # إنشاء مخطط التطريز
+    # إنشاء المخطط
     pattern = create_colored_pattern(img)
 
-    # حفظ الصور
-    preview_path, path_path = save_previews(img, pattern, base_name)
+    # توليد معاينات Base64
+    preview_b64, path_b64 = get_previews_base64(img, pattern)
 
-    # إنشاء ملف DST في الذاكرة
+    # ملف DST في الذاكرة
     bio = BytesIO()
     write_dst(pattern, bio)
     bio.seek(0)
+    dst_b64 = base64.b64encode(bio.getvalue()).decode('utf-8')
 
-    return send_file(
-        bio,
-        as_attachment=True,
-        download_name=f'{base_name}.dst',
-        mimetype='application/octet-stream'
-    )
+    return jsonify({
+        'dst_file': dst_b64,
+        'preview_image': preview_b64,
+        'stitch_path': path_b64,
+        'filename': f"{base_name}.dst"
+    })
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
