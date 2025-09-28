@@ -1,60 +1,44 @@
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-import math
+from flask import Flask, request, jsonify, send_file
+import os, cv2, numpy as np
+from pyembroidery import EmbPattern, write_dst
 
 app = Flask(__name__)
-CORS(app)
+UPLOAD_FOLDER = "uploads"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-def ai_generate_ultra_32k_stitches(image_bytes, width=30720, height=17280, step=1):
-    """
-    النسخة 6.0 المطلقة:
-    - دعم 32K Ultra HD
-    - محاكاة الفيزياء الواقعية للخيوط
-    - أكثر من 256 لون خيط
-    - كثافة الغرز وتداخل الألوان الواقعية
-    - ارتفاع الغرزة z لمحاكاة القماش الثلاثي الأبعاد
-    """
-    stitches = []
-    # أكثر من 256 لون خيط
-    colors = [(i*3 % 256, i*5 % 256, i*7 % 256) for i in range(256)]
+stitch_data = []
 
-    for y in range(0, height, step):
-        direction = 1 if (y // step) % 2 == 0 else -1
-        for x in range(0, width, step):
-            px = x if direction == 1 else width - x - 1
-            idx = int(abs(math.sin(px*0.005 + y*0.005)*len(colors))) % len(colors)
-            r,g,b = colors[idx]
+@app.route("/upload", methods=["POST"])
+def upload_image():
+    global stitch_data
+    stitch_data = []
+    file = request.files['image']
+    filepath = os.path.join(UPLOAD_FOLDER, file.filename)
+    file.save(filepath)
 
-            # محاكاة ارتفاع الغرزة z وحركة الإبرة الواقعية
-            z = int((math.sin(px*0.002 + y*0.003)*15))  # تأثير ارتفاع الغرزة
-            intensity = (r+g+b)/3
+    # معالجة الصورة وتحويلها إلى حواف
+    img = cv2.imread(filepath)
+    img = cv2.resize(img, (500, 500))
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 100, 200)
 
-            if intensity < 250:
-                stitches.append({"x": px, "y": y, "z": z, "color":{"r":r,"g":g,"b":b}})
+    # توليد غرز حول الحواف
+    pattern = EmbPattern()
+    height, width = edges.shape
+    for y in range(0, height, 2):
+        for x in range(0, width, 2):
+            if edges[y, x] > 0:
+                pattern.add_stitch_absolute(x, y)
+                stitch_data.append(((x, y), (x+1, y+1), "#000"))
 
-    return stitches, width, height
+    output_path = os.path.join(UPLOAD_FOLDER, "output.dst")
+    write_dst(pattern, output_path)
+    return jsonify({"stitches": stitch_data})
 
-@app.route('/upload', methods=['POST'])
-def upload():
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file uploaded'}), 400
-
-    file = request.files['file']
-    file_type = request.form.get('type', 'DST').upper()
-
-    try:
-        image_bytes = file.read()
-        stitches, width, height = ai_generate_ultra_32k_stitches(image_bytes)
-
-        return jsonify({
-            "file_name": f"pattern.{file_type.lower()}",
-            "stitches": stitches,
-            "width": width,
-            "height": height
-        })
-
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+@app.route("/download")
+def download():
+    return send_file(os.path.join(UPLOAD_FOLDER, "output.dst"), as_attachment=True)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    # يمكنك تغيير host وport إذا لزم
+    app.run(debug=True)
