@@ -18,10 +18,10 @@ def preprocess_image(image):
     return bw
 
 def generate_embroidery_pattern(image, file_type="DST"):
-    """توليد مسار غرز حقيقي"""
+    """توليد مسار غرز حقيقي بدون معاينة"""
     pattern = EmbPattern()
     thread = EmbThread()
-    thread.set_color(0, 0, 0)
+    thread.set_color(0, 0, 0)  # أسود
     pattern.add_thread(thread)
 
     pixels = np.array(image)
