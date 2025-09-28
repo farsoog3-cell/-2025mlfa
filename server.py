@@ -28,7 +28,7 @@ def generate_embroidery_pattern(image, file_type="DST"):
     height, width = pixels.shape
     step = 2  # حجم الغرزة
 
-    # توليد الغرز مع اتجاه الإبرة يمين/يسار لتغطية الصورة بالكامل
+    # توليد الغرز مع اتجاه الإبرة يمين/يسار
     for y in range(0, height, step):
         direction = 1 if (y // step) % 2 == 0 else -1
         for x in range(0, width, step):
@@ -36,12 +36,12 @@ def generate_embroidery_pattern(image, file_type="DST"):
             if pixels[y, px] == 0:
                 pattern.add_stitch_absolute(px, y)
 
-    # إطار حول القالب
-    pattern.add_stitch_absolute(0, 0)
-    pattern.add_stitch_absolute(width - 1, 0)
-    pattern.add_stitch_absolute(width - 1, height - 1)
-    pattern.add_stitch_absolute(0, height - 1)
-    pattern.add_stitch_absolute(0, 0)
+    # إضافة إطار حول القالب
+    pattern.add_stitch_absolute(0,0)
+    pattern.add_stitch_absolute(width-1,0)
+    pattern.add_stitch_absolute(width-1,height-1)
+    pattern.add_stitch_absolute(0,height-1)
+    pattern.add_stitch_absolute(0,0)
 
     pattern.end()
     bio = BytesIO()
