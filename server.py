@@ -1,10 +1,10 @@
 from flask import Flask, request, send_file
-from pyembroidery import EmbPattern, write_pes, END, STITCH
+from pyembroidery import EmbPattern, write_pes
 from io import BytesIO
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app)
+CORS(app)  # السماح للصفحة المستضافة على دومين آخر بالوصول للسيرفر
 
 @app.route('/generate_pes', methods=['POST'])
 def generate_pes():
@@ -17,22 +17,10 @@ def generate_pes():
 
         # إنشاء نمط التطريز
         pattern = EmbPattern()
-
-        scale = 0.2  # تصغير الحجم من بكسلات إلى مليمترات تقريبياً
-        first = True
         for pt in points:
-            x = pt.get('x', 0) * scale
-            y = pt.get('y', 0) * scale
-            if first:
-                # أول غرزة كبداية
-                pattern.add_stitch_absolute(STITCH, x, y)
-                first = False
-            else:
-                # باقي الغرز
-                pattern.add_stitch_absolute(STITCH, x, y)
-
-        # إنهاء الملف بشكل صحيح
-        pattern.end()
+            x = pt.get('x', 0)
+            y = pt.get('y', 0)
+            pattern.add_stitch_absolute(x, y)
 
         # إنشاء ملف PES في الذاكرة
         buf = BytesIO()
@@ -46,7 +34,6 @@ def generate_pes():
         )
     except Exception as e:
         return {"error": str(e)}, 500
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
