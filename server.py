@@ -1,5 +1,5 @@
 from flask import Flask, request, send_file
-from pyembroidery import EmbPattern, write_pes, COLOR_BLACK, Thread
+from pyembroidery import EmbPattern, write_pes, Thread
 from io import BytesIO
 from flask_cors import CORS
 from PIL import Image
@@ -10,52 +10,45 @@ app = Flask(__name__)
 CORS(app)
 
 # إعدادات آمنة للماكينة
-MAX_SIZE = 400  # أقصى عرض أو ارتفاع بالبيكسل
-STITCH_SPACING = 3  # المسافة بين الغرز
-JUMP_THRESHOLD = 15  # المسافة لتحويل الغرزة إلى Jump Stitch
-MAX_COLORS = 8  # أقصى عدد ألوان للماكينة
+MAX_SIZE = 400
+STITCH_SPACING = 3
+JUMP_THRESHOLD = 15
+MAX_COLORS = 1  # سنستخدم لون واحد لمحاكاة الخيط المتصل
 
-# تحويل الصورة إلى نقاط غرز لكل لون
-def image_to_points(img: Image.Image):
+# تحويل الصورة إلى مسار غرزة متصلة
+def image_to_stitch_path(img: Image.Image):
     img.thumbnail((MAX_SIZE, MAX_SIZE))
-    img = img.convert('RGB')
-
-    # تقليل عدد الألوان
-    img = img.quantize(colors=MAX_COLORS)
+    img = img.convert('L')  # تحويل للصورة الرمادية
     pixels = np.array(img)
     width, height = img.size
-    points_by_color = {}
+    points = []
 
     for y in range(0, height, STITCH_SPACING):
         for x in range(0, width, STITCH_SPACING):
-            color = tuple(pixels[y, x])
-            if color not in points_by_color:
-                points_by_color[color] = []
-            points_by_color[color].append((x, y))
+            brightness = pixels[y, x]
+            if brightness < 200:  # نقاط الغرز حسب الظل
+                points.append((x, y))
     
-    return points_by_color
-
-# ترتيب النقاط لتقليل مسار الإبرة
-def nearest_neighbor_sort(points):
+    # ترتيب النقاط بطريقة تقريبية لمسار الإبرة
     if not points:
         return []
-    points = points.copy()
+
     sorted_points = [points.pop(0)]
     while points:
         last = sorted_points[-1]
         next_point = min(points, key=lambda p: math.hypot(p[0]-last[0], p[1]-last[1]))
         sorted_points.append(next_point)
         points.remove(next_point)
+    
     return sorted_points
 
-# إضافة نقاط الغرز إلى المخطط
-def add_points_to_pattern(pattern, points, color=None):
-    if color:
-        pattern.add_thread(Thread(*color))  # تعيين لون الخيط
-    
-    sorted_points = nearest_neighbor_sort(points)
+# إنشاء PES من مسار الغرز
+def generate_pes_from_path(points):
+    pattern = EmbPattern()
+    # لون واحد للخيط
+    pattern.add_thread(Thread(0,0,0))
     prev = None
-    for x, y in sorted_points:
+    for x, y in points:
         if prev:
             dx = x - prev[0]
             dy = y - prev[1]
@@ -67,6 +60,11 @@ def add_points_to_pattern(pattern, points, color=None):
         else:
             pattern.add_stitch_absolute(x, y)
         prev = (x, y)
+    pattern.end()
+    buf = BytesIO()
+    write_pes(pattern, buf)
+    buf.seek(0)
+    return buf
 
 @app.route('/generate_pes', methods=['POST'])
 def generate_pes():
@@ -76,19 +74,10 @@ def generate_pes():
 
         img_file = request.files['image']
         img = Image.open(img_file)
-        points_by_color = image_to_points(img)
-
-        pattern = EmbPattern()
-        for color, points in points_by_color.items():
-            add_points_to_pattern(pattern, points, color=color)
-
-        pattern.end()
-        buf = BytesIO()
-        write_pes(pattern, buf)
-        buf.seek(0)
+        points = image_to_stitch_path(img)
+        buf = generate_pes_from_path(points)
 
         return send_file(buf, download_name="stitch_pattern.pes", mimetype="application/x-pes")
-    
     except Exception as e:
         return {"error": str(e)}, 500
 
