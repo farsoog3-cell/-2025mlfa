@@ -1,44 +1,39 @@
-from flask import Flask, request, jsonify, send_file
-import os, cv2, numpy as np
-from pyembroidery import EmbPattern, write_dst
+from flask import Flask, request, send_file
+from pyembroidery import EmbPattern, write_pes
+from io import BytesIO
+from flask_cors import CORS
 
 app = Flask(__name__)
-UPLOAD_FOLDER = "uploads"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+CORS(app)  # السماح للصفحة المستضافة على دومين آخر بالوصول للسيرفر
 
-stitch_data = []
+@app.route('/generate_pes', methods=['POST'])
+def generate_pes():
+    try:
+        data = request.get_json()
+        points = data.get('points', [])
 
-@app.route("/upload", methods=["POST"])
-def upload_image():
-    global stitch_data
-    stitch_data = []
-    file = request.files['image']
-    filepath = os.path.join(UPLOAD_FOLDER, file.filename)
-    file.save(filepath)
+        if not points:
+            return {"error": "لا توجد نقاط غرز"}, 400
 
-    # معالجة الصورة وتحويلها إلى حواف
-    img = cv2.imread(filepath)
-    img = cv2.resize(img, (500, 500))
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    edges = cv2.Canny(gray, 100, 200)
+        # إنشاء نمط التطريز
+        pattern = EmbPattern()
+        for pt in points:
+            x = pt.get('x', 0)
+            y = pt.get('y', 0)
+            pattern.add_stitch_absolute(x, y)
 
-    # توليد غرز حول الحواف
-    pattern = EmbPattern()
-    height, width = edges.shape
-    for y in range(0, height, 2):
-        for x in range(0, width, 2):
-            if edges[y, x] > 0:
-                pattern.add_stitch_absolute(x, y)
-                stitch_data.append(((x, y), (x+1, y+1), "#000"))
+        # إنشاء ملف PES في الذاكرة
+        buf = BytesIO()
+        write_pes(pattern, buf)
+        buf.seek(0)
 
-    output_path = os.path.join(UPLOAD_FOLDER, "output.dst")
-    write_dst(pattern, output_path)
-    return jsonify({"stitches": stitch_data})
-
-@app.route("/download")
-def download():
-    return send_file(os.path.join(UPLOAD_FOLDER, "output.dst"), as_attachment=True)
+        return send_file(
+            buf,
+            download_name="stitch_pattern.pes",
+            mimetype="application/octet-stream"
+        )
+    except Exception as e:
+        return {"error": str(e)}, 500
 
 if __name__ == "__main__":
-    # يمكنك تغيير host وport إذا لزم
-    app.run(debug=True)
+    app.run(host="0.0.0.0", port=5000)
