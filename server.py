@@ -1,6 +1,6 @@
 from flask import Flask, request, send_file
 from flask_cors import CORS
-from pyembroidery import EmbPattern, write_pes, STITCH_TYPE
+from pyembroidery import EmbPattern, write_pes
 import cv2
 import numpy as np
 from io import BytesIO
@@ -22,16 +22,15 @@ def process_image_to_stitches(image_bytes, step=3, threshold=127):
     # إنشاء نمط التطريز
     pattern = EmbPattern()
 
+    # تحويل Contours إلى نقاط غرز
     for contour in contours:
         contour = contour.reshape(-1, 2)
-        # إذا كانت المنطقة كبيرة نستخدم Fill Stitch، إذا صغيرة Satin
-        area = cv2.contourArea(contour)
         for i in range(0, len(contour), step):
             x, y = contour[i]
             pattern.add_stitch_absolute(x, y)
 
     # إنهاء الغرز
-    pattern.add_command(STITCH_TYPE.END)
+    pattern.add_command("END")
     return pattern
 
 @app.route('/generate_pes', methods=['POST'])
@@ -43,10 +42,8 @@ def generate_pes():
         image_file = request.files['image']
         image_bytes = image_file.read()
 
-        # معالجة الصورة وتحويلها إلى نمط التطريز
         pattern = process_image_to_stitches(image_bytes)
 
-        # إنشاء ملف PES في الذاكرة
         buf = BytesIO()
         write_pes(pattern, buf)
         buf.seek(0)
