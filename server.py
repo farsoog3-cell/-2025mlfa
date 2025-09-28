@@ -1,6 +1,6 @@
 # server.py
 from flask import Flask, request, send_file
-from pyembroidery import EmbPattern, write_pes
+from pyembroidery import EmbPattern, STITCH, SATIN, write_pes
 import io
 
 app = Flask(__name__)
@@ -11,10 +11,22 @@ def generate_pes():
     points = data.get("points", [])
     pattern = EmbPattern()
     
+    last_type = None
     for pt in points:
-        x, y = pt['x'], pt['y']
-        pattern.add_stitch_absolute(x, y)  # غرزة واحدة لكل نقطة
-    
+        x, y, g_type = pt['x'], pt['y'], pt.get('type', 'fill')
+
+        if g_type == 'fill':
+            if last_type != 'fill':
+                pattern.add_satin(x, y)  # بداية منطقة Fill
+            else:
+                pattern.add_stitch_absolute(x, y)
+        elif g_type == 'edge':
+            pattern.add_satin(x, y)
+        else:
+            pattern.add_stitch_absolute(x, y)
+
+        last_type = g_type
+
     file_stream = io.BytesIO()
     write_pes(pattern, file_stream)
     file_stream.seek(0)
