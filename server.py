@@ -9,7 +9,7 @@ from io import BytesIO
 app = Flask(__name__)
 CORS(app)
 
-# ملف PES الأصلي لتعلم أسلوب التطريز
+# ملف PES النموذجي لتعليم أسلوب التطريز
 SAMPLE_PES_FILE = "sample.pes"
 
 def pil_to_cv2(img_pil):
@@ -46,17 +46,15 @@ def generate_pes_from_image():
         if 'image' not in request.files:
             return jsonify({"error":"يرجى رفع الصورة"}),400
 
-        # تحميل الصورة الجديدة
         img_pil = Image.open(request.files['image'].stream).convert("RGB")
         img_cv = pil_to_cv2(img_pil)
         h, w = img_cv.shape[:2]
 
-        # قراءة ملف PES النموذجي لتحديد أسلوب التطريز
+        # قراءة ملف PES النموذجي لتعليم أسلوب التطريز
         sample_pattern = read(SAMPLE_PES_FILE, 'PES')
         sample_width = sample_pattern.bounds[2] - sample_pattern.bounds[0]
         scale_mm_per_px = sample_width / w if w else 1.0
 
-        # استخراج الألوان وأقنعة الصورة الجديدة
         masks = extract_colors_and_mask(img_cv, num_colors=3)
 
         pattern = EmbPattern()
@@ -70,12 +68,10 @@ def generate_pes_from_image():
                 y_mm = y_px * scale_mm_per_px
                 pattern.add_stitch_absolute(x_mm, y_mm)
 
-        # إنشاء ملف PES جديد في الذاكرة
         buf = BytesIO()
         write_pes(pattern, buf)
         buf.seek(0)
 
-        # معلومات الألوان وعدد الغرز
         colors_info = [{"hex": '#{:02x}{:02x}{:02x}'.format(*item["color_rgb"]),
                         "stitches": item["stitches"]} for item in masks]
 
