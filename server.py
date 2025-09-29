@@ -10,13 +10,12 @@ import json
 app = Flask(__name__)
 CORS(app)
 
-SAMPLE_DST_FILE = "sample.dst"  # ملف DST حقيقي لتعليم الأسلوب
+SAMPLE_DST_FILE = "sample.dst"  # ضع ملف DST الحقيقي هنا لتعليم أسلوب التطريز
 
 def pil_to_cv2(img_pil):
     return cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
 
 def extract_colors_and_mask(img_cv, num_colors=3):
-    """تحليل الصورة لاستخراج أهم الألوان وعدد الغرز لكل لون"""
     img_data = img_cv.reshape((-1,3))
     img_data = np.float32(img_data)
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
@@ -28,9 +27,9 @@ def extract_colors_and_mask(img_cv, num_colors=3):
         mask = (labels == i).reshape(img_cv.shape[:2]).astype(np.uint8)*255
         stitch_count = int(np.sum(mask>0)/10)
         masks.append({
-            "color_rgb": color.tolist(),  # فقط البيانات اللازمة للـ JSON
+            "color_rgb": color.tolist(),
             "stitches": stitch_count,
-            "mask": mask  # لن نستخدم هذا في الهيدر
+            "mask": mask
         })
     return masks
 
@@ -52,7 +51,7 @@ def generate_dst_from_image():
         img_cv = pil_to_cv2(img_pil)
         h, w = img_cv.shape[:2]
 
-        # قراءة ملف DST النموذجي لتعليم أسلوب التطريز
+        # قراءة ملف DST النموذجي لتعليم الأسلوب
         sample_pattern = read(SAMPLE_DST_FILE, 'DST')
         sample_width = sample_pattern.bounds[2] - sample_pattern.bounds[0]
         scale_mm_per_px = sample_width / w if w else 1.0
@@ -72,12 +71,11 @@ def generate_dst_from_image():
         write_dst(pattern, buf)
         buf.seek(0)
 
-        # إرسال ألوان الغرز وعددها فقط، بدون الـ mask
         colors_info = [{"hex": '#{:02x}{:02x}{:02x}'.format(*item["color_rgb"]),
                         "stitches": item["stitches"]} for item in masks]
 
         response = send_file(buf, download_name="ai_stitch.dst", mimetype="application/octet-stream")
-        response.headers['X-Colors-Info'] = json.dumps(colors_info)  # JSON صالح
+        response.headers['X-Colors-Info'] = json.dumps(colors_info)
         return response
 
     except Exception as e:
