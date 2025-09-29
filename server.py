@@ -5,11 +5,12 @@ from PIL import Image
 import numpy as np
 import cv2
 from io import BytesIO
+import json
 
 app = Flask(__name__)
 CORS(app)
 
-SAMPLE_DST_FILE = "sample.dst"  # استخدم ملف DST حقيقي لتعليم الأسلوب
+SAMPLE_DST_FILE = "sample.dst"  # ضع ملف DST الحقيقي هنا لتعليم أسلوب التطريز
 
 def pil_to_cv2(img_pil):
     return cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
@@ -25,7 +26,7 @@ def extract_colors_and_mask(img_cv, num_colors=3):
     for i, color in enumerate(centers):
         mask = (labels == i).reshape(img_cv.shape[:2]).astype(np.uint8)*255
         masks.append({
-            "color_rgb": color,
+            "color_rgb": color.tolist(),  # حولنا numpy array إلى list لتسهيل JSON
             "mask": mask,
             "stitches": int(np.sum(mask>0)/10)
         })
@@ -74,7 +75,8 @@ def generate_dst_from_image():
                         "stitches": item["stitches"]} for item in masks]
 
         response = send_file(buf, download_name="ai_stitch.dst", mimetype="application/octet-stream")
-        response.headers['X-Colors-Info'] = str(colors_info)
+        # إرسال JSON صالح للهيدر
+        response.headers['X-Colors-Info'] = json.dumps(colors_info)
         return response
 
     except Exception as e:
