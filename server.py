@@ -1,4 +1,4 @@
-# ai_embroidery_server.py
+# ai_embroidery_server_updated.py
 from flask import Flask, request, jsonify, send_file, url_for
 from pyembroidery import EmbPattern, write_pes
 from PIL import Image, ImageOps, ImageFilter
@@ -10,30 +10,21 @@ UPLOAD_FOLDER = "/tmp"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 def ai_remove_background(img):
-    """
-    إزالة الخلفية باستخدام ذكاء صناعي بسيط:
-    تحديد البيكسلات البيضاء تقريبًا وجعلها شفافة
-    """
+    """إزالة الخلفية البيضاء بطريقة ذكية"""
     img = img.convert("RGBA")
     data = np.array(img)
     r, g, b, a = data[:,:,0], data[:,:,1], data[:,:,2], data[:,:,3]
     mask = (r > 200) & (g > 200) & (b > 200)
     data[:,:,3][mask] = 0
-    img = Image.fromarray(data)
-    return img
+    return Image.fromarray(data)
 
 def ai_convert_bw(img):
-    """
-    تحويل ذكي إلى أبيض وأسود:
-    يستخدم مرشح Gaussian لتنعيم الصورة قبل التحويل
-    """
+    """تحويل ذكي إلى أبيض وأسود"""
     gray = img.convert("L").filter(ImageFilter.GaussianBlur(1))
-    # Adaptive threshold
     arr = np.array(gray)
-    threshold = np.mean(arr)  # العتبة الذكية
+    threshold = np.mean(arr)
     bw_arr = np.where(arr < threshold, 0, 255).astype(np.uint8)
-    bw_img = Image.fromarray(bw_arr)
-    return bw_img
+    return Image.fromarray(bw_arr)
 
 @app.route("/process_image", methods=["POST"])
 def process_image():
@@ -50,17 +41,17 @@ def process_image():
         original_data = "data:image/png;base64," + base64.b64encode(original_io.getvalue()).decode()
 
         # خيارات المعالجة
-        processing = request.form.get('processing', 'none')
-
+        processing = request.form.get('processing', 'both')  # default 'both'
         log_steps = []
 
         if processing in ['remove_bg', 'both']:
             img = ai_remove_background(img)
             log_steps.append("تم إزالة الخلفية باستخدام الذكاء الصناعي")
-
         if processing in ['bw', 'both']:
             img = ai_convert_bw(img)
             log_steps.append("تم تحويل الصورة إلى أبيض وأسود باستخدام الذكاء الصناعي")
+        if processing == 'none':
+            log_steps.append("لم يتم تطبيق أي معالجة على الصورة (none)")
 
         # حفظ الصورة المعالجة
         processed_io = io.BytesIO()
