@@ -1,62 +1,88 @@
 # server.py
-from flask import Flask, request, send_file
+from flask import Flask, request, jsonify, send_file, url_for
 from pyembroidery import EmbPattern, STITCH, write_pes
+from PIL import Image, ImageOps
 import io
+import os
 import math
+import uuid
 
 app = Flask(__name__)
+UPLOAD_FOLDER = "/tmp"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-@app.route("/generate_pes", methods=["POST"])
-def generate_pes():
-    data = request.get_json()
-    points = data.get("points", [])
+def remove_background(img):
+    # تحويل أي لون أبيض للخلفية إلى شفافية
+    img = img.convert("RGBA")
+    datas = img.getdata()
+    newData = []
+    for item in datas:
+        if item[0]>200 and item[1]>200 and item[2]>200: newData.append((255,255,255,0))
+        else: newData.append(item)
+    img.putdata(newData)
+    return img
 
-    if not points:
-        return "لا توجد نقاط غرز!", 400
+@app.route("/process_image", methods=["POST"])
+def process_image():
+    if 'image' not in request.files:
+        return "لا توجد صورة!", 400
 
+    file = request.files['image']
+    img = Image.open(file)
+
+    # حفظ الصورة الأصلية مؤقتًا
+    original_io = io.BytesIO()
+    img.save(original_io, format='PNG')
+    original_io.seek(0)
+    original_data = "data:image/png;base64," + base64.b64encode(original_io.getvalue()).decode()
+
+    # تحويل أبيض وأسود وإزالة الخلفية
+    bw = ImageOps.grayscale(img)
+    bw = remove_background(bw)
+    processed_io = io.BytesIO()
+    bw.save(processed_io, format='PNG')
+    processed_io.seek(0)
+    processed_data = "data:image/png;base64," + base64.b64encode(processed_io.getvalue()).decode()
+
+    # تحليل الغرز (أسلوب zig-zag)
+    stitchPoints = []
+    step = 4
+    width, height = bw.size
+    for y in range(0,height,step):
+        rowPoints=[]
+        for x in range(0,width,step):
+            gray = bw.getpixel((x,y))
+            if gray<128:
+                rowPoints.append({'x':x,'y':y,'type':'fill'})
+        if (y//step)%2==1: rowPoints.reverse()
+        stitchPoints.extend(rowPoints)
+
+    # إنشاء ملف PES
     pattern = EmbPattern()
-    last_point = None
-
-    for pt in points:
-        x, y = pt['x'], pt['y']
-        g_type = pt.get('type','fill')
-        angle = pt.get('angle',0)
-
-        # إضافة Jump إذا المسافة كبيرة
+    last_point=None
+    for pt in stitchPoints:
+        x,y = pt['x'], pt['y']
         if last_point:
-            dx = x - last_point[0]
-            dy = y - last_point[1]
-            distance = math.hypot(dx, dy)
-            if distance > 20:
-                pattern.add_jump_absolute(x, y)
-
-        # إضافة الغرز حسب نوع المنطقة
-        if g_type=='fill':
-            pattern.add_stitch_absolute(x, y)
-        elif g_type=='edge':
-            pattern.add_stitch_absolute(x, y) # يمكن تطوير Satin Edge حقيقي لاحقاً
-        elif g_type=='satin':
-            # إنشاء خطوط طويلة حسب الزاوية
-            length = 6
-            x2 = x + length*math.cos(angle)
-            y2 = y + length*math.sin(angle)
-            pattern.add_stitch_absolute(x, y)
-            pattern.add_stitch_absolute(x2, y2)
-        else:
-            pattern.add_stitch_absolute(x, y)
-
-        last_point = (x, y)
-
+            distance = math.hypot(x-last_point[0],y-last_point[1])
+            if distance>20: pattern.add_jump_absolute(x,y)
+        pattern.add_stitch_absolute(x,y)
+        last_point=(x,y)
     pattern.end()
-    file_stream = io.BytesIO()
-    write_pes(pattern, file_stream)
-    file_stream.seek(0)
+    pes_filename = os.path.join(UPLOAD_FOLDER, str(uuid.uuid4())+".pes")
+    write_pes(pattern, pes_filename)
 
-    return send_file(
-        file_stream,
-        mimetype="application/octet-stream",
-        download_name="output.pes"
-    )
+    # إعادة البيانات كـ JSON
+    return jsonify({
+        'original': original_data,
+        'processed': processed_data,
+        'stitchPoints': stitchPoints,
+        'pes': url_for('get_file', filename=os.path.basename(pes_filename))
+    })
 
+@app.route('/file/<filename>')
+def get_file(filename):
+    return send_file(os.path.join(UPLOAD_FOLDER, filename), as_attachment=True)
+
+import base64
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
