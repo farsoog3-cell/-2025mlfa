@@ -10,12 +10,13 @@ import json
 app = Flask(__name__)
 CORS(app)
 
-SAMPLE_DST_FILE = "sample.dst"  # ضع ملف DST الحقيقي هنا لتعليم أسلوب التطريز
+SAMPLE_DST_FILE = "sample.dst"  # ملف DST حقيقي لتعليم الأسلوب
 
 def pil_to_cv2(img_pil):
     return cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
 
 def extract_colors_and_mask(img_cv, num_colors=3):
+    """تحليل الصورة لاستخراج أهم الألوان وعدد الغرز لكل لون"""
     img_data = img_cv.reshape((-1,3))
     img_data = np.float32(img_data)
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
@@ -25,10 +26,11 @@ def extract_colors_and_mask(img_cv, num_colors=3):
     masks=[]
     for i, color in enumerate(centers):
         mask = (labels == i).reshape(img_cv.shape[:2]).astype(np.uint8)*255
+        stitch_count = int(np.sum(mask>0)/10)
         masks.append({
-            "color_rgb": color.tolist(),  # حولنا numpy array إلى list لتسهيل JSON
-            "mask": mask,
-            "stitches": int(np.sum(mask>0)/10)
+            "color_rgb": color.tolist(),  # فقط البيانات اللازمة للـ JSON
+            "stitches": stitch_count,
+            "mask": mask  # لن نستخدم هذا في الهيدر
         })
     return masks
 
@@ -58,7 +60,6 @@ def generate_dst_from_image():
         masks = extract_colors_and_mask(img_cv, num_colors=3)
 
         pattern = EmbPattern()
-
         for item in masks:
             mask = item['mask']
             stitches_px = generate_stitches(mask, step=5)
@@ -71,12 +72,12 @@ def generate_dst_from_image():
         write_dst(pattern, buf)
         buf.seek(0)
 
+        # إرسال ألوان الغرز وعددها فقط، بدون الـ mask
         colors_info = [{"hex": '#{:02x}{:02x}{:02x}'.format(*item["color_rgb"]),
                         "stitches": item["stitches"]} for item in masks]
 
         response = send_file(buf, download_name="ai_stitch.dst", mimetype="application/octet-stream")
-        # إرسال JSON صالح للهيدر
-        response.headers['X-Colors-Info'] = json.dumps(colors_info)
+        response.headers['X-Colors-Info'] = json.dumps(colors_info)  # JSON صالح
         return response
 
     except Exception as e:
