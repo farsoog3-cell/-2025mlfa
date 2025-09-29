@@ -1,4 +1,5 @@
 from flask import Flask, request, send_file, jsonify
+from flask_cors import CORS
 from pyembroidery import EmbPattern, write_pes, read
 from PIL import Image
 import numpy as np
@@ -6,6 +7,7 @@ import cv2
 from io import BytesIO
 
 app = Flask(__name__)
+CORS(app)  # السماح لأي دومين بالوصول للخادم
 
 # ملف التطريز المخزن مسبقاً لتعليم الأسلوب
 SAMPLE_PES_FILE = "sample.pes"
@@ -15,7 +17,7 @@ def pil_to_cv2(img_pil):
 
 def extract_colors_and_mask(img_cv, num_colors=3):
     """
-    تحلل الصورة لتحديد أهم الألوان وتقسيمها إلى أقنعة.
+    تحليل الصورة لتحديد أهم الألوان وتقسيمها إلى أقنعة.
     """
     img_data = img_cv.reshape((-1,3))
     img_data = np.float32(img_data)
