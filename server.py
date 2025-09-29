@@ -1,6 +1,6 @@
 from flask import Flask, request, send_file, jsonify
 from flask_cors import CORS
-from pyembroidery import EmbPattern, write_pes, read
+from pyembroidery import EmbPattern, write_dst, read
 from PIL import Image
 import numpy as np
 import cv2
@@ -9,8 +9,7 @@ from io import BytesIO
 app = Flask(__name__)
 CORS(app)
 
-# ملف PES النموذجي لتعليم أسلوب التطريز
-SAMPLE_PES_FILE = "sample.pes"
+SAMPLE_DST_FILE = "sample.dst"  # استخدم ملف DST حقيقي لتعليم الأسلوب
 
 def pil_to_cv2(img_pil):
     return cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
@@ -40,8 +39,8 @@ def generate_stitches(mask, step=5):
             stitches.append((x,y))
     return stitches
 
-@app.route("/generate_pes_from_image", methods=["POST"])
-def generate_pes_from_image():
+@app.route("/generate_dst_from_image", methods=["POST"])
+def generate_dst_from_image():
     try:
         if 'image' not in request.files:
             return jsonify({"error":"يرجى رفع الصورة"}),400
@@ -50,8 +49,8 @@ def generate_pes_from_image():
         img_cv = pil_to_cv2(img_pil)
         h, w = img_cv.shape[:2]
 
-        # قراءة ملف PES النموذجي لتعليم أسلوب التطريز
-        sample_pattern = read(SAMPLE_PES_FILE, 'PES')
+        # قراءة ملف DST النموذجي لتعليم أسلوب التطريز
+        sample_pattern = read(SAMPLE_DST_FILE, 'DST')
         sample_width = sample_pattern.bounds[2] - sample_pattern.bounds[0]
         scale_mm_per_px = sample_width / w if w else 1.0
 
@@ -59,7 +58,6 @@ def generate_pes_from_image():
 
         pattern = EmbPattern()
 
-        # توليد الغرز طبقًا لنمط sample.pes
         for item in masks:
             mask = item['mask']
             stitches_px = generate_stitches(mask, step=5)
@@ -69,13 +67,13 @@ def generate_pes_from_image():
                 pattern.add_stitch_absolute(x_mm, y_mm)
 
         buf = BytesIO()
-        write_pes(pattern, buf)
+        write_dst(pattern, buf)
         buf.seek(0)
 
         colors_info = [{"hex": '#{:02x}{:02x}{:02x}'.format(*item["color_rgb"]),
                         "stitches": item["stitches"]} for item in masks]
 
-        response = send_file(buf, download_name="ai_stitch.pes", mimetype="application/octet-stream")
+        response = send_file(buf, download_name="ai_stitch.dst", mimetype="application/octet-stream")
         response.headers['X-Colors-Info'] = str(colors_info)
         return response
 
