@@ -1,7 +1,9 @@
-# server.py
+# smart_server.py
 from flask import Flask, request, jsonify, send_file, url_for
 from pyembroidery import EmbPattern, write_pes
 from PIL import Image, ImageOps
+import cv2
+import numpy as np
 import io, os, math, uuid, base64
 
 app = Flask(__name__)
@@ -9,20 +11,50 @@ UPLOAD_FOLDER = "/tmp"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 def remove_background(img):
-    """
-    إزالة الخلفية البيضاء من الصورة وتحويلها إلى RGBA
-    """
+    """ إزالة الخلفية البيضاء وتحويلها شفافة """
     img = img.convert("RGBA")
     datas = img.getdata()
     newData = []
     for item in datas:
-        # الخلفية البيضاء تتحول إلى شفافة
         if item[0] > 200 and item[1] > 200 and item[2] > 200:
             newData.append((255, 255, 255, 0))
         else:
             newData.append(item)
     img.putdata(newData)
     return img
+
+def preprocess_image(img, option="none"):
+    """ تنفيذ معالجة الصورة حسب الاختيار """
+    if option in ["remove_bg", "both"]:
+        img = remove_background(img)
+    if option in ["bw", "both"]:
+        img = img.convert("L")
+    return img
+
+def analyze_stitches(img):
+    """ تحليل الصورة واستخراج نقاط الغرز الذكية """
+    if img.mode != "L":
+        gray = img.convert("L")
+    else:
+        gray = img
+
+    # تحويل إلى numpy array
+    np_img = np.array(gray)
+    # استخدام Canny لاكتشاف الحواف
+    edges = cv2.Canny(np_img, 100, 200)
+    height, width = edges.shape
+    stitchPoints = []
+
+    step = 4
+    for y in range(0, height, step):
+        rowPoints = []
+        for x in range(0, width, step):
+            if edges[y, x] > 0:
+                rowPoints.append({'x': int(x), 'y': int(y), 'type': 'fill'})
+        if (y // step) % 2 == 1:
+            rowPoints.reverse()
+        stitchPoints.extend(rowPoints)
+    return stitchPoints
 
 @app.route("/process_image", methods=["POST"])
 def process_image():
@@ -32,41 +64,27 @@ def process_image():
         file = request.files['image']
         img = Image.open(file)
 
-        # حفظ الصورة الأصلية مؤقتًا (Base64 للواجهة)
+        processing_option = request.form.get('processing', 'none')
+
+        # حفظ الصورة الأصلية Base64
         original_io = io.BytesIO()
         img.save(original_io, format='PNG')
         original_io.seek(0)
         original_data = "data:image/png;base64," + base64.b64encode(original_io.getvalue()).decode()
 
-        # إزالة الخلفية
-        img_no_bg = remove_background(img)
+        # معالجة ذكية
+        img_processed = preprocess_image(img, processing_option)
 
-        # تحويل إلى أبيض وأسود (Grayscale)
-        bw = img_no_bg.convert("L")  # كل بيكسل int من 0-255
-
-        # حفظ الصورة المعالجة مؤقتًا (Base64 للواجهة)
+        # حفظ الصورة بعد المعالجة Base64
         processed_io = io.BytesIO()
-        bw.save(processed_io, format='PNG')
+        img_processed.save(processed_io, format='PNG')
         processed_io.seek(0)
         processed_data = "data:image/png;base64," + base64.b64encode(processed_io.getvalue()).decode()
 
-        # تحليل الغرز (zig-zag)
-        stitchPoints = []
-        step = 4
-        width, height = bw.size
-        for y in range(0, height, step):
-            rowPoints = []
-            for x in range(0, width, step):
-                gray = bw.getpixel((x, y))
-                if isinstance(gray, tuple):
-                    gray = gray[0]  # إذا tuple RGB
-                if gray < 128:
-                    rowPoints.append({'x': int(x), 'y': int(y), 'type': 'fill'})
-            if (y // step) % 2 == 1:
-                rowPoints.reverse()  # ترتيب zig-zag
-            stitchPoints.extend(rowPoints)
+        # استخراج نقاط الغرز
+        stitchPoints = analyze_stitches(img_processed)
 
-        # إنشاء ملف PES
+        # إنشاء ملف PES ذكي
         pattern = EmbPattern()
         last_point = None
         for pt in stitchPoints:
@@ -79,7 +97,7 @@ def process_image():
             last_point = (x, y)
         pattern.end()
 
-        # حفظ ملف PES مؤقتًا
+        # حفظ الملف PES مؤقتًا
         pes_filename = os.path.join(UPLOAD_FOLDER, str(uuid.uuid4()) + ".pes")
         write_pes(pattern, pes_filename)
 
