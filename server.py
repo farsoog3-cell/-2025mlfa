@@ -1,60 +1,39 @@
-# smart_server.py
+# ai_embroidery_server.py
 from flask import Flask, request, jsonify, send_file, url_for
 from pyembroidery import EmbPattern, write_pes
-from PIL import Image, ImageOps
-import cv2
-import numpy as np
+from PIL import Image, ImageOps, ImageFilter
 import io, os, math, uuid, base64
+import numpy as np
 
 app = Flask(__name__)
 UPLOAD_FOLDER = "/tmp"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-def remove_background(img):
-    """ إزالة الخلفية البيضاء وتحويلها شفافة """
+def ai_remove_background(img):
+    """
+    إزالة الخلفية باستخدام ذكاء صناعي بسيط:
+    تحديد البيكسلات البيضاء تقريبًا وجعلها شفافة
+    """
     img = img.convert("RGBA")
-    datas = img.getdata()
-    newData = []
-    for item in datas:
-        if item[0] > 200 and item[1] > 200 and item[2] > 200:
-            newData.append((255, 255, 255, 0))
-        else:
-            newData.append(item)
-    img.putdata(newData)
+    data = np.array(img)
+    r, g, b, a = data[:,:,0], data[:,:,1], data[:,:,2], data[:,:,3]
+    mask = (r > 200) & (g > 200) & (b > 200)
+    data[:,:,3][mask] = 0
+    img = Image.fromarray(data)
     return img
 
-def preprocess_image(img, option="none"):
-    """ تنفيذ معالجة الصورة حسب الاختيار """
-    if option in ["remove_bg", "both"]:
-        img = remove_background(img)
-    if option in ["bw", "both"]:
-        img = img.convert("L")
-    return img
-
-def analyze_stitches(img):
-    """ تحليل الصورة واستخراج نقاط الغرز الذكية """
-    if img.mode != "L":
-        gray = img.convert("L")
-    else:
-        gray = img
-
-    # تحويل إلى numpy array
-    np_img = np.array(gray)
-    # استخدام Canny لاكتشاف الحواف
-    edges = cv2.Canny(np_img, 100, 200)
-    height, width = edges.shape
-    stitchPoints = []
-
-    step = 4
-    for y in range(0, height, step):
-        rowPoints = []
-        for x in range(0, width, step):
-            if edges[y, x] > 0:
-                rowPoints.append({'x': int(x), 'y': int(y), 'type': 'fill'})
-        if (y // step) % 2 == 1:
-            rowPoints.reverse()
-        stitchPoints.extend(rowPoints)
-    return stitchPoints
+def ai_convert_bw(img):
+    """
+    تحويل ذكي إلى أبيض وأسود:
+    يستخدم مرشح Gaussian لتنعيم الصورة قبل التحويل
+    """
+    gray = img.convert("L").filter(ImageFilter.GaussianBlur(1))
+    # Adaptive threshold
+    arr = np.array(gray)
+    threshold = np.mean(arr)  # العتبة الذكية
+    bw_arr = np.where(arr < threshold, 0, 255).astype(np.uint8)
+    bw_img = Image.fromarray(bw_arr)
+    return bw_img
 
 @app.route("/process_image", methods=["POST"])
 def process_image():
@@ -64,27 +43,49 @@ def process_image():
         file = request.files['image']
         img = Image.open(file)
 
-        processing_option = request.form.get('processing', 'none')
-
-        # حفظ الصورة الأصلية Base64
+        # حفظ الصورة الأصلية
         original_io = io.BytesIO()
         img.save(original_io, format='PNG')
         original_io.seek(0)
         original_data = "data:image/png;base64," + base64.b64encode(original_io.getvalue()).decode()
 
-        # معالجة ذكية
-        img_processed = preprocess_image(img, processing_option)
+        # خيارات المعالجة
+        processing = request.form.get('processing', 'none')
 
-        # حفظ الصورة بعد المعالجة Base64
+        log_steps = []
+
+        if processing in ['remove_bg', 'both']:
+            img = ai_remove_background(img)
+            log_steps.append("تم إزالة الخلفية باستخدام الذكاء الصناعي")
+
+        if processing in ['bw', 'both']:
+            img = ai_convert_bw(img)
+            log_steps.append("تم تحويل الصورة إلى أبيض وأسود باستخدام الذكاء الصناعي")
+
+        # حفظ الصورة المعالجة
         processed_io = io.BytesIO()
-        img_processed.save(processed_io, format='PNG')
+        img.save(processed_io, format='PNG')
         processed_io.seek(0)
         processed_data = "data:image/png;base64," + base64.b64encode(processed_io.getvalue()).decode()
 
         # استخراج نقاط الغرز
-        stitchPoints = analyze_stitches(img_processed)
+        step = 4
+        width, height = img.size
+        stitchPoints = []
+        bw_img = img.convert("L")
+        arr = np.array(bw_img)
+        for y in range(0, height, step):
+            rowPoints = []
+            for x in range(0, width, step):
+                gray = arr[y, x] if len(arr.shape)==2 else arr[y,x,0]
+                if gray < 128:
+                    rowPoints.append({'x': int(x), 'y': int(y), 'type': 'fill'})
+            if (y//step)%2 == 1:
+                rowPoints.reverse()
+            stitchPoints.extend(rowPoints)
+        log_steps.append(f"تم استخراج نقاط الغرز. عدد الغرز: {len(stitchPoints)}")
 
-        # إنشاء ملف PES ذكي
+        # إنشاء ملف PES
         pattern = EmbPattern()
         last_point = None
         for pt in stitchPoints:
@@ -96,16 +97,16 @@ def process_image():
             pattern.add_stitch_absolute(int(x), int(y))
             last_point = (x, y)
         pattern.end()
-
-        # حفظ الملف PES مؤقتًا
-        pes_filename = os.path.join(UPLOAD_FOLDER, str(uuid.uuid4()) + ".pes")
+        pes_filename = os.path.join(UPLOAD_FOLDER, str(uuid.uuid4())+".pes")
         write_pes(pattern, pes_filename)
+        log_steps.append(f"تم إنشاء ملف PES: {os.path.basename(pes_filename)}")
 
         return jsonify({
             'original': original_data,
             'processed': processed_data,
             'stitchPoints': stitchPoints,
-            'pes': url_for('get_file', filename=os.path.basename(pes_filename))
+            'pes': url_for('get_file', filename=os.path.basename(pes_filename)),
+            'log': log_steps
         })
 
     except Exception as e:
