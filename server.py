@@ -7,33 +7,28 @@ import cv2
 from io import BytesIO
 
 app = Flask(__name__)
-CORS(app)  # السماح لأي دومين بالوصول للخادم
+CORS(app)
 
-# ملف التطريز المخزن مسبقاً لتعليم الأسلوب
+# ملف PES الأصلي لتعلم أسلوب التطريز
 SAMPLE_PES_FILE = "sample.pes"
 
 def pil_to_cv2(img_pil):
     return cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
 
 def extract_colors_and_mask(img_cv, num_colors=3):
-    """
-    تحليل الصورة لتحديد أهم الألوان وتقسيمها إلى أقنعة.
-    """
     img_data = img_cv.reshape((-1,3))
     img_data = np.float32(img_data)
-
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
     _, labels, centers = cv2.kmeans(img_data, num_colors, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
     centers = np.uint8(centers)
     labels = labels.flatten()
-
     masks=[]
     for i, color in enumerate(centers):
         mask = (labels == i).reshape(img_cv.shape[:2]).astype(np.uint8)*255
         masks.append({
             "color_rgb": color,
             "mask": mask,
-            "stitches": int(np.sum(mask>0)/10)  # عدد غرز تقريبي
+            "stitches": int(np.sum(mask>0)/10)
         })
     return masks
 
@@ -51,19 +46,22 @@ def generate_pes_from_image():
         if 'image' not in request.files:
             return jsonify({"error":"يرجى رفع الصورة"}),400
 
+        # تحميل الصورة الجديدة
         img_pil = Image.open(request.files['image'].stream).convert("RGB")
         img_cv = pil_to_cv2(img_pil)
         h, w = img_cv.shape[:2]
 
-        # قراءة ملف PES المخزن لتحديد مقاييس التطريز
+        # قراءة ملف PES النموذجي لتحديد أسلوب التطريز
         sample_pattern = read(SAMPLE_PES_FILE, 'PES')
         sample_width = sample_pattern.bounds[2] - sample_pattern.bounds[0]
         scale_mm_per_px = sample_width / w if w else 1.0
 
-        # استخراج أهم الألوان والأقنعة
+        # استخراج الألوان وأقنعة الصورة الجديدة
         masks = extract_colors_and_mask(img_cv, num_colors=3)
 
         pattern = EmbPattern()
+
+        # توليد الغرز طبقًا لنمط sample.pes
         for item in masks:
             mask = item['mask']
             stitches_px = generate_stitches(mask, step=5)
@@ -72,13 +70,13 @@ def generate_pes_from_image():
                 y_mm = y_px * scale_mm_per_px
                 pattern.add_stitch_absolute(x_mm, y_mm)
 
-        # إنشاء ملف PES في الذاكرة
+        # إنشاء ملف PES جديد في الذاكرة
         buf = BytesIO()
         write_pes(pattern, buf)
         buf.seek(0)
 
-        # إرسال الألوان وعدد الغرز في الهيدر
-        colors_info = [{"hex": '#{:02x}{:02x}{:02x}'.format(*item["color_rgb"]), 
+        # معلومات الألوان وعدد الغرز
+        colors_info = [{"hex": '#{:02x}{:02x}{:02x}'.format(*item["color_rgb"]),
                         "stitches": item["stitches"]} for item in masks]
 
         response = send_file(buf, download_name="ai_stitch.pes", mimetype="application/octet-stream")
