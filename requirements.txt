@@ -3,5 +3,4 @@ flask-cors
 pyembroidery
 pillow
 opencv-python-headless
-scikit-learn
 numpy
