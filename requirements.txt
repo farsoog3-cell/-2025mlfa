@@ -1,7 +1,6 @@
-flask
+Flask
 flask-cors
-pyembroidery
-pillow
+Pillow
 numpy
-opencv-python-headless
-scikit-learn
+matplotlib
+reportlab
