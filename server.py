@@ -1,6 +1,7 @@
 from flask import Flask, request, send_file, render_template
 from flask_cors import CORS
 from PIL import Image
+import numpy as np
 import io
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
@@ -20,28 +21,26 @@ DMC_COLORS = {
 }
 
 def closest_color(rgb):
-    return min(DMC_COLORS.keys(), key=lambda c: sum((sc - rc) ** 2 for sc, rc in zip(c, rgb)))
+    return min(DMC_COLORS.keys(), key=lambda c: sum((sc - rc)**2 for sc, rc in zip(c, rgb)))
 
-def generate_pattern(image_stream, grid_size):
-    """تحويل الصورة إلى شبكة مربعات باستخدام Pillow فقط."""
-    img = Image.open(image_stream).convert("RGB")
-    img = img.resize((grid_size, grid_size), Image.NEAREST)
-    pixels = img.load()
+def remove_background(img):
+    """إزالة الخلفية البيضاء تلقائيًا"""
+    img = img.convert("RGBA")
+    data = np.array(img)
+    r, g, b, a = data.T
+    white_areas = (r > 240) & (g > 240) & (b > 240)
+    data[..., :-1][white_areas.T] = (255, 255, 255)
+    data[..., -1][white_areas.T] = 0
+    img2 = Image.fromarray(data)
+    return img2
 
-    buf_img = io.BytesIO()
-    img.save(buf_img, format="PNG")
-    buf_img.seek(0)
-
-    used_colors = set()
-    for x in range(grid_size):
-        for y in range(grid_size):
-            col = closest_color(pixels[x, y])
-            used_colors.add(col)
-
-    return buf_img, used_colors
+def generate_stitch_map(img, grid_size):
+    """إنشاء خريطة الإبرة تلقائيًا"""
+    img_small = img.convert("RGB").resize((grid_size, grid_size), Image.NEAREST)
+    return img_small
 
 def generate_pdf(pattern_img_buf, colors_used, grid_size, stitch_type, fabric_type):
-    """إنشاء PDF مباشر مع قائمة أدوات منظمة."""
+    """إنشاء PDF مع كل المعلومات والأدوات"""
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     width, height = A4
@@ -54,7 +53,6 @@ def generate_pdf(pattern_img_buf, colors_used, grid_size, stitch_type, fabric_ty
     # معلومات القالب
     c.setFont("Helvetica-Bold", 16)
     c.drawString(3 * cm, height - 2 * cm, "قالب التطريز")
-
     c.setFont("Helvetica", 12)
     y = height - (img_h + 4 * cm) - 1 * cm
     c.drawString(3 * cm, y, f"حجم الشبكة: {grid_size} × {grid_size}")
@@ -99,7 +97,6 @@ def generate_pdf(pattern_img_buf, colors_used, grid_size, stitch_type, fabric_ty
         "مكبر بصري إذا كان العمل دقيقًا",
         "منضدة عمل أو لوحة مستقرة"
     ]
-
     for tool in tools:
         c.drawString(4 * cm, y, f"- {tool}")
         y -= 0.7 * cm
@@ -113,6 +110,23 @@ def generate_pdf(pattern_img_buf, colors_used, grid_size, stitch_type, fabric_ty
 def index_page():
     return render_template("index.html")
 
+@app.route("/upload_preview", methods=["POST"])
+def upload_preview():
+    if "image" not in request.files:
+        return "No image", 400
+    image_file = request.files["image"]
+    grid_size = int(request.form.get("grid_size", 40))
+    remove_bg = request.form.get("remove_bg") == "true"
+
+    img = Image.open(image_file)
+    if remove_bg:
+        img = remove_background(img)
+    pattern_img = generate_stitch_map(img, grid_size)
+    buf_img = io.BytesIO()
+    pattern_img.save(buf_img, format="PNG")
+    buf_img.seek(0)
+    return send_file(buf_img, mimetype="image/png")
+
 @app.route("/upload", methods=["POST"])
 def upload_route():
     if "image" not in request.files:
@@ -122,10 +136,26 @@ def upload_route():
     grid_size = int(request.form.get("grid_size", 40))
     stitch_type = request.form.get("stitch_type", "cross")
     fabric_type = request.form.get("fabric_type", "Aida")
+    remove_bg = request.form.get("remove_bg") == "true"
 
-    pattern_buf, used_colors = generate_pattern(image_file, grid_size)
-    pdf_buf = generate_pdf(pattern_buf, used_colors, grid_size, stitch_type, fabric_type)
+    img = Image.open(image_file)
+    if remove_bg:
+        img = remove_background(img)
+    pattern_img = generate_stitch_map(img, grid_size)
 
+    buf_img = io.BytesIO()
+    pattern_img.save(buf_img, format="PNG")
+    buf_img.seek(0)
+
+    # استخراج الألوان المستخدمة
+    pixels = np.array(pattern_img)
+    used_colors = set()
+    for row in pixels:
+        for pix in row:
+            col = closest_color(tuple(pix))
+            used_colors.add(col)
+
+    pdf_buf = generate_pdf(buf_img, used_colors, grid_size, stitch_type, fabric_type)
     return send_file(pdf_buf, mimetype="application/pdf")
 
 if __name__ == "__main__":
