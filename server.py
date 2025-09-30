@@ -10,9 +10,9 @@ from reportlab.lib.units import cm
 import os
 
 app = Flask(__name__)
-CORS(app)
+CORS(app)  # يسمح للواجهة بالاتصال من أي دومين
 
-# قائمة ألوان DMC تجريبية
+# ألوان DMC تجريبية
 DMC_COLORS = {
     (255, 0, 0): "DMC 666 – أحمر",
     (0, 0, 255): "DMC 3843 – أزرق",
@@ -40,6 +40,7 @@ def generate_pattern(image_stream, grid_size):
     buf_img = io.BytesIO()
     plt.savefig(buf_img, format="png", bbox_inches="tight")
     buf_img.seek(0)
+    plt.close(fig)
 
     unique = set()
     for row in pixels:
@@ -47,7 +48,6 @@ def generate_pattern(image_stream, grid_size):
             col = closest_color(tuple(pix))
             unique.add(col)
 
-    plt.close(fig)  # 🔴 مهم عشان ما يستهلك RAM على Render
     return buf_img, unique
 
 def generate_pdf(pattern_img_buf, colors_used, grid_size, stitch_type, fabric_type):
