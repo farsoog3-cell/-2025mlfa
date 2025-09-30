@@ -10,7 +10,7 @@ import json
 app = Flask(__name__)
 CORS(app)
 
-SAMPLE_DST_FILE = "sample.dst"  # ضع ملف DST الحقيقي هنا لتعليم أسلوب التطريز
+SAMPLE_DST_FILE = "sample.dst"  # ملف DST الحقيقي لتعليم أسلوب التطريز
 
 def pil_to_cv2(img_pil):
     return cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
@@ -60,9 +60,9 @@ def generate_dst_from_image():
 
         pattern = EmbPattern()
         for item in masks:
-            mask = item['mask']
+            mask = item['mask']  # فقط داخليًا
             stitches_px = generate_stitches(mask, step=5)
-            for x_px,y_px in stitches_px:
+            for x_px, y_px in stitches_px:
                 x_mm = x_px * scale_mm_per_px
                 y_mm = y_px * scale_mm_per_px
                 pattern.add_stitch_absolute(x_mm, y_mm)
@@ -71,8 +71,14 @@ def generate_dst_from_image():
         write_dst(pattern, buf)
         buf.seek(0)
 
-        colors_info = [{"hex": '#{:02x}{:02x}{:02x}'.format(*item["color_rgb"]),
-                        "stitches": item["stitches"]} for item in masks]
+        # إرسال الألوان وعدد الغرز فقط
+        colors_info = [
+            {
+                "hex": '#{:02x}{:02x}{:02x}'.format(*item["color_rgb"]),
+                "stitches": item["stitches"]
+            }
+            for item in masks
+        ]
 
         response = send_file(buf, download_name="ai_stitch.dst", mimetype="application/octet-stream")
         response.headers['X-Colors-Info'] = json.dumps(colors_info)
