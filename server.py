@@ -1,16 +1,14 @@
 from flask import Flask, request, send_file, render_template
 from flask_cors import CORS
 from PIL import Image
-import numpy as np
 import io
-import matplotlib.pyplot as plt
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import cm
 import os
 
 app = Flask(__name__)
-CORS(app)  # يسمح للواجهة بالاتصال من أي دومين
+CORS(app)
 
 # ألوان DMC تجريبية
 DMC_COLORS = {
@@ -25,45 +23,35 @@ def closest_color(rgb):
     return min(DMC_COLORS.keys(), key=lambda c: sum((sc - rc) ** 2 for sc, rc in zip(c, rgb)))
 
 def generate_pattern(image_stream, grid_size):
+    """تحويل الصورة إلى شبكة مربعات باستخدام Pillow فقط."""
     img = Image.open(image_stream).convert("RGB")
     img = img.resize((grid_size, grid_size), Image.NEAREST)
-    pixels = np.array(img)
-
-    fig, ax = plt.subplots(figsize=(6, 6))
-    ax.imshow(pixels)
-    ax.set_xticks(range(grid_size))
-    ax.set_yticks(range(grid_size))
-    ax.set_xticklabels([])
-    ax.set_yticklabels([])
-    ax.grid(True, color="black")
+    pixels = img.load()
 
     buf_img = io.BytesIO()
-    plt.savefig(buf_img, format="png", bbox_inches="tight")
+    img.save(buf_img, format="PNG")
     buf_img.seek(0)
-    plt.close(fig)
 
-    unique = set()
-    for row in pixels:
-        for pix in row:
-            col = closest_color(tuple(pix))
-            unique.add(col)
+    used_colors = set()
+    for x in range(grid_size):
+        for y in range(grid_size):
+            col = closest_color(pixels[x, y])
+            used_colors.add(col)
 
-    return buf_img, unique
+    return buf_img, used_colors
 
 def generate_pdf(pattern_img_buf, colors_used, grid_size, stitch_type, fabric_type):
+    """إنشاء PDF مباشر مع قائمة أدوات منظمة."""
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     width, height = A4
 
-    img = Image.open(pattern_img_buf)
+    # رسم الصورة
     img_w = 12 * cm
     img_h = 12 * cm
-    img_buf = io.BytesIO()
-    img = img.resize((int(img_w), int(img_h)))
-    img.save(img_buf, format="PNG")
-    img_buf.seek(0)
-    c.drawInlineImage(img_buf, 3 * cm, height - (img_h + 4 * cm), img_w, img_h)
+    c.drawInlineImage(pattern_img_buf, 3 * cm, height - (img_h + 4 * cm), img_w, img_h)
 
+    # معلومات القالب
     c.setFont("Helvetica-Bold", 16)
     c.drawString(3 * cm, height - 2 * cm, "قالب التطريز")
 
@@ -76,6 +64,7 @@ def generate_pdf(pattern_img_buf, colors_used, grid_size, stitch_type, fabric_ty
     c.drawString(3 * cm, y, f"نوع القماش: {fabric_type}")
     y -= 1 * cm
 
+    # الألوان المستخدمة
     c.setFont("Helvetica-Bold", 14)
     c.drawString(3 * cm, y, "الألوان المطلوبة:")
     y -= 1 * cm
@@ -85,18 +74,35 @@ def generate_pdf(pattern_img_buf, colors_used, grid_size, stitch_type, fabric_ty
         c.drawString(4 * cm, y, f"- {name}")
         y -= 0.7 * cm
 
+    # الأدوات الموصى بها
     y -= 1 * cm
     c.setFont("Helvetica-Bold", 14)
-    c.drawString(3 * cm, y, "الأدوات الموصى بها:")
+    c.drawString(3 * cm, y, "📌 قائمة الأدوات الموصى بها:")
     y -= 1 * cm
     c.setFont("Helvetica", 12)
-    c.drawString(4 * cm, y, "- قماش " + fabric_type)
-    y -= 0.8 * cm
-    c.drawString(4 * cm, y, "- إبرة تطريز مناسبة")
-    y -= 0.8 * cm
-    c.drawString(4 * cm, y, "- إطار تطريز")
-    y -= 0.8 * cm
-    c.drawString(4 * cm, y, "- مقص صغير")
+
+    tools = [
+        "إطار تطريز (Embroidery Hoop)",
+        "إبرة تطريز مناسبة",
+        "خيط التطريز",
+        "مقص صغير ودقيق",
+        "إبرة لإزالة الغرز (Seam Ripper)",
+        "دبوس أو مشبك لتثبيت القماش",
+        "قطعة قماش حسب الاختيار (Aida / Linen / Felt)",
+        "شريط لاصق لتثبيت حواف القماش",
+        "مسطرة أو أداة قياس مربعات",
+        "علامة أقمشة قابلة للمسح",
+        "دليل الغرز (Stitch Guide)",
+        "بطاقة ألوان (Color Card)",
+        "لوحة لتثبيت الخيوط",
+        "مصباح صغير للضوء المباشر",
+        "مكبر بصري إذا كان العمل دقيقًا",
+        "منضدة عمل أو لوحة مستقرة"
+    ]
+
+    for tool in tools:
+        c.drawString(4 * cm, y, f"- {tool}")
+        y -= 0.7 * cm
 
     c.showPage()
     c.save()
