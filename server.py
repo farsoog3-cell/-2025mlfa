@@ -2,20 +2,24 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from pyembroidery import read
+from io import BytesIO
 
 app = Flask(__name__)
-CORS(app)  # يسمح لأي موقع بالوصول
+CORS(app)  # يسمح للصفحات بالوصول
 
 @app.route("/extract_dst_info", methods=["POST"])
 def extract_dst_info():
     if "file" not in request.files:
         return jsonify({"error":"يرجى رفع ملف DST"}), 400
+
     f = request.files["file"]
     try:
-        pattern = read(f.stream)
+        # تحويل الملف إلى BytesIO قبل القراءة
+        file_bytes = f.read()
+        pattern = read(BytesIO(file_bytes))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    
+
     # ألوان الخيوط
     colors = [[th.red, th.green, th.blue] for th in pattern.threadlist]
     if not colors:
